@@ -1,151 +1,101 @@
-# 🌌 Earendel (埃兰迪尔) - Pure TypeScript & WASI Web Linux OS Terminal
+# 🌌 Earendel - Pure TypeScript Web Linux Terminal
 
-> **The zero-backend, 100% browser-native Linux Web OS powered by POSIX VFS, WebAssembly (WASI), and dynamic Cloud APT Package Ecosystem.**
+> **The zero-backend, 100% browser-native Linux OS simulator built for modern computer science education, interactive labs, and tech embedding.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue?logo=typescript)](https://www.typescriptlang.org/)
-[![WebAssembly](https://img.shields.io/badge/WebAssembly-WASI-red?logo=webassembly)](https://webassembly.org/)
 [![React](https://img.shields.io/badge/React-18.0+-61dafb?logo=react)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-5.0+-646cff?logo=vite)](https://vitejs.dev/)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/techarts0/earendel/pulls)
 
-**Earendel (埃兰迪尔)** is an ultra-lightweight, zero-cost-to-host Web Linux Terminal and operating system engine written in pure TypeScript. Built with standard **Filesystem Hierarchy Standard (FHS)**, a **Three-Tier Storage Hierarchy (RAM / NV-RAM / Cloud IMG)**, and an **authentic POSIX WASI & JS Closure Dual Runtime Engine**, Earendel delivers a complete Linux TTY experience directly in the browser with **instant boot, 0s latency, 100% client-side privacy, and dynamic APT cloud package distribution.**
+**Earendel** is an ultra-lightweight, zero-cost-to-host Linux terminal emulator written in pure TypeScript. Designed to solve the traditional headaches of OS labs—such as heavy VMware setups, server maintenance costs, and broken student environments—Earendel delivers a complete Linux TTY experience directly in the browser with **instant boot, 0s latency, and 100% client-side privacy.**
 
 👉 **Live Demo**: [http://linux.techarts.cn](http://linux.techarts.cn)  
 *(Default Credentials: Username `hello` | Password `123456`)*
 
 ---
 
-## 🌟 Architecture & Core Infrastructure Highlights
+## 💡 Why Earendel? (The EdTech Pain Points Solved)
 
-```text
-  +-----------------------------------------------------------------------+
-  |                   Earendel Web Operating System                       |
-  +-----------------------------------------------------------------------+
-  |  [Layer 1: User Interface]   xterm.js / Theme Manager / Sound Engine |
-  +-----------------------------------------------------------------------+
-  |  [Layer 2: Execution Engine] POSIX Shell Engine / Command Registry    |
-  +-----------------------------------+-----------------------------------+
-  |  [JsRuntimeEngine]                |  [WasmRuntimeEngine]              |
-  |  Node.js Closure Sandbox          |  POSIX WASI Preview 1 Vectors     |
-  +-----------------------------------+-----------------------------------+
-  |  [Layer 3: APT Package Subsystem] `apt` / `dpkg` / `/var/lib/dpkg/`  |
-  +-----------------------------------------------------------------------+
-  |  [Layer 4: Three-Tier Storage]  RAM (VFS) <-> NV-RAM (IndexedDB)    |
-  |                                 <-> Local Disk / Cloud Hub (.ear)    |
-  +-----------------------------------------------------------------------+
-```
-
-### 🏛️ 1. Pure-Blood Linux Filesystem Hierarchy & 3-Tier Storage Model
-- **Strict FHS Compliance**: Complete Unix directory skeleton (`/bin`, `/boot`, `/dev`, `/etc`, `/home/hello`, `/lib`, `/opt`, `/usr/bin`, `/var/cache/apt/archives`, `/var/lib/dpkg/info`).
-- **3-Tier Storage Engine**:
-  - **L1 RAM**: Ultra-fast in-memory CLI evaluation tree;
-  - **L2 NV-RAM (IndexedDB)**: Persistent non-volatile RAM auto-restoring VFS state across browser reloads;
-  - **L3 Cold / Cloud Storage (`.earendel-img`)**: Exportable self-verifying encrypted `.earendel-img` files with salted SHA-256 HMAC checksums, zero-collision machine UUIDs (`usr_<hash>`), and cloud REST Hub push/pull roaming.
-
-### ⚡ 2. Dual Infrastructure Runtimes (JS & POSIX WASI Engine)
-- **`JsRuntimeEngine`**: Isolated Function closure sandbox injecting virtualized `console` redirection, `process.env`, and `process.argv` to execute CommonJS/ES Module bundles seamlessly.
-- **`WasmRuntimeEngine`**: Authentic **POSIX WASI (WebAssembly System Interface Preview 1)** runtime supporting memory vectors (`fd_write`), C/Rust `argc`/`argv` memory pointer injection (`args_get`), high-precision timers (`clock_time_get`), and Web Crypto random seeds.
-
-### 📦 3. Dynamic Cloud APT & DPKG Ecosystem (`*.ear` Packages)
-- **Authentic Network Physical Boundary**: Real HTTP network error handling for `apt update` and `apt install` pointing to official repo (`http://repo.linux.techarts.cn`).
-- **Earendel Native `.ear` Package Format**: Packages are self-contained `.ear.json` archives containing metadata and executable closures.
-- **6-Layer Physical Package Persistence**:
-  1. `/var/cache/apt/archives/*.ear` (Original downloaded archives)
-  2. `/usr/lib/${pkg}/bundle.json` (Unpacked extracted runtime payload)
-  3. `/usr/bin/${cmd}` (Executable Shebang symbols with `rwxr-xr-x` permissions)
-  4. `/var/lib/dpkg/status` (Plain text DPKG status database)
-  5. `/var/lib/dpkg/info/${pkg}.info` (Metadata for `apt upgrade` version diffing)
-  6. `/var/lib/dpkg/info/${pkg}.list` (Clean physical file list for `apt remove`)
+| Traditional Linux Labs (VMware / AWS Cloud Shell) | The Earendel Advantage |
+| :--- | :--- |
+| ❌ High server costs ($100s/mo for backend VM clusters) | **⚡ $0 Server Cost**: Runs 100% on student's browser CPU/Memory |
+| ❌ Complex setup (VMware, BIOS virtualization errors) | **🚀 Zero Setup**: Open a URL, start learning in 3 seconds |
+| ❌ Risk of broken environments & system crashes | **🛡️ One-Click Reset**: Instant VFS snapshot rollback |
+| ❌ Privacy & Security concerns with shared servers | **🔒 Completely Isolated**: Local IndexedDB storage, zero server leakage |
 
 ---
 
-## ⚡ Quick Command Reference
+## 🌟 Key Features & Highlights
 
-### 🌐 VFS Remote Image Hub & Disk I/O Commands
-```bash
-# Push VFS snapshot to local disk (.earendel-img download) or cloud REST Hub
-vfs push
+### 🎓 1. Built for CS & Linux Education
+- **FHS & Persistent VFS**: Fully implemented **Filesystem Hierarchy Standard** (`/bin`, `/boot`, `/dev`, `/etc`, `/home`, `/lib`, `/opt`, `/usr`, `/var`) with IndexedDB persistence and `/var/log/syslog` boot logs.
+- **Time-Machine Snapshots**: Save (`snapshot save init`) and restore/rollback state instantly in milliseconds if students mess up the environment.
+- **Native Python 3 & Node.js Runtimes**: Execute `.py` files with loops, variables, and math, or run `.js` scripts directly on browser V8 with custom `console.log` and `process.argv` handling.
 
-# Pull VFS snapshot from local disk file picker or remote cloud Hub
-vfs pull
+### 🐧 2. Rich CLI & Real-Time Subsystems
+- **Virtual Docker Suite**: Emulates Docker CLI (`docker ps`, `docker ps -a`, `docker images`, `docker run -it`, `docker stop`, `docker rm`).
+- **Netfilter Firewall (`ufw` & `iptables`)**: Simulate network security rules blocking dynamic `curl` or `ping` requests in real-time.
+- **`tmux` Terminal Window Multiplexer**: Split your browser screen vertically (`tmux split`) or horizontally (`tmux split-h`) into multiple independent active terminal sessions.
+- **Geek Easter Eggs**: Includes `tell <name>` (ANSI ASCII fireworks), `rm -rf /` (nuclear bomb failsafe easter egg), `sl` (steam locomotive animation), and `figlet` (3D ASCII banner font generator).
 
-# Configure cloud Remote Hub URL and password (auto-generates Machine UUID)
-vfs remote set-url http://hub.linux.techarts.cn
-vfs remote set-credential mysecretpass
-```
-
-### 📦 APT & DPKG Package Management Suite
-```bash
-# Update package index from official REST repo
-sudo apt update
-
-# Install dynamic JS or WebAssembly packages (.ear.json)
-sudo apt install cowsay
-sudo apt install http://cdn.example.com/custom_app.ear.json
-
-# Smoothly upgrade all installed packages using SemVer comparison
-sudo apt upgrade
-
-# Perform clean physical removal of installed packages
-sudo apt remove cowsay
-
-# Query authentic DPKG physical status database
-dpkg -l
-```
-
-### ⚡ WASM & System Computation
-```bash
-# C-compiled Native WebAssembly Calculator
-wasm-calc 10 * 20
-
-# Rust-compiled Native WebAssembly SHA-256 Crypto Engine
-wasm-sha256 "Hello Earendel Web OS"
-```
+### 🎨 3. Highly Customizable & Embeddable
+- **5 Sleek Color Themes**: Switch instantly with `theme` between `default`, `matrix`, `dracula`, `cyberpunk`, and `monokai`.
+- **Easy Web Embedding**: Packaged as an iframe or React component for LMS (Canvas, Moodle) or technical blogs.
 
 ---
 
-## 📄 `.ear.json` Package Specification
+## 🚀 Quick Start
 
-```json
-{
-  "name": "cowsay",
-  "version": "1.0.0",
-  "type": "js",
-  "sizeKb": 120,
-  "description": "Configurable speaking cow in ASCII art",
-  "executables": [
-    {
-      "name": "cowsay",
-      "description": "Configurable speaking cow in ASCII art",
-      "category": "text"
-    }
-  ],
-  "code": "/* JavaScript Closure Bundle Source */"
-}
-```
+### For Developers
 
----
-
-## 🚀 Quick Start (Local Development)
-
-```bash
-# Clone the repository
 git clone https://github.com/techarts0/earendel.git
-
-# Enter project directory
 cd earendel
-
-# Install dependencies
 npm install
-
-# Run local development server
 npm run dev
-```
+
+Open your browser and visit `http://localhost:3000`. Login with username `hello` and password `123456`!
+
+### For Educators & Bloggers (Embed in 1 Minute)
+Simply embed Earendel into your online course, documentation, or blog via Iframe:
+
+<iframe src="http://linux.techarts.cn" width="100%" height="600px" frameborder="0"></iframe>
+
+---
+
+## 💻 Supported Commands Matrix
+
+| Category | Commands |
+| :--- | :--- |
+| **File Management** | `ls`, `pwd`, `cd`, `cat`, `touch`, `mkdir`, `rm`, `cp`, `mv`, `head`, `tail`, `wc`, `find`, `which`, `whereis`, `locate` |
+| **Permissions & Users** | `chmod`, `chown`, `whoami`, `who`, `id`, `useradd`, `userdel`, `su`, `sudo`, `login`, `umask` |
+| **Interpreters** | `python3` (or `python`), `node` (or `js`) |
+| **Text Editors** | `vi` (or `vim`), `nano` |
+| **Networking & Security** | `ping`, `curl`, `ufw`, `iptables`, `tcpdump`, `traceroute` |
+| **Container & Process** | `docker`, `ps`, `top`, `kill`, `systemctl`, `apt`, `df`, `free`, `uptime` |
+| **Multiplexer & Snapshot**| `tmux`, `snapshot` (`backup`, `restore`) |
+| **Geek & Customization** | `theme`, `sound`, `man`, `alias`, `unalias`, `cheat`, `tell`, `sl`, `figlet` |
+
+---
+
+## 🏢 Enterprise & Commercial Use (EdTech / B2B)
+
+Looking to integrate Earendel into your university, bootcamp, or commercial learning platform?
+
+- **Custom Interactive Courses**: Pre-define files, labs, and interactive step-by-step terminal challenges.
+- **LMS Integration**: Webhook/API hookups for automated assignment grading and submission.
+- **White-Labeling**: Custom branding, default themes, and pre-installed toolchains.
+
+📩 **Contact for Institutional Support**: Open a [GitHub Discussion](https://github.com/techarts0/earendel/discussions) or reach out directly.
 
 ---
 
 ## 📜 License
 
-Distributed under the **MIT License**. See `LICENSE` for details.
-Made with ❤️ by the **Techarts Team**.
+Distributed under the **MIT License**. Free for personal, educational, and commercial use.
+
+---
+
+<p align="center">
+  <i>Crafted with ❤️ for students, terminal lovers, and geek culture enthusiasts worldwide.</i>
+</p>
