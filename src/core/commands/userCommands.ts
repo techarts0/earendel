@@ -55,7 +55,7 @@ export const userCommands: Command[] = [
     description: 'Print real and effective user and group IDs',
     category: 'sys',
     execute: (ctx) => {
-      const user = ctx.env['USER'] || 'student';
+      const user = ctx.env['USER'] || 'hello';
       if (user === 'root') {
         return { stdout: 'uid=0(root) gid=0(root) groups=0(root)\n', stderr: '', exitCode: 0 };
       }
@@ -133,7 +133,7 @@ export const userCommands: Command[] = [
     description: 'Change user password',
     category: 'sys',
     execute: (ctx) => {
-      let username = ctx.env['USER'] || 'student';
+      let username = ctx.env['USER'] || 'hello';
       let newPass = ctx.args[0];
 
       if (ctx.args.length >= 2) {
@@ -225,7 +225,7 @@ export const userCommands: Command[] = [
     description: 'Print the groups a user is in',
     category: 'sys',
     execute: (ctx) => {
-      const user = ctx.args[0] || ctx.env['USER'] || 'student';
+      const user = ctx.args[0] || ctx.env['USER'] || 'hello';
       return { stdout: `${user} : ${user} sudo adm cdrom dip plugdev\n`, stderr: '', exitCode: 0 };
     },
   },

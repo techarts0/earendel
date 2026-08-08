@@ -18,7 +18,7 @@ interface FileBrowserProps {
 
 export const FileBrowser: React.FC<FileBrowserProps> = ({ onOpenFile }) => {
   const [, setTick] = useState(0);
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set(['/', '/home', '/home/student']));
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(new Set(['/', '/home', '/home/hello']));
   const [newItemName, setNewItemName] = useState('');
   const [newItemType, setNewItemType] = useState<'file' | 'dir'>('file');
   const [isCreating, setIsCreating] = useState(false);

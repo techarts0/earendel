@@ -5,6 +5,7 @@ import { WebLinksAddon } from '@xterm/addon-web-links';
 import { globalShellEngine } from '../core/shellEngine';
 import { globalVFS } from '../core/vfs';
 import { globalCommandRegistry } from '../core/commandRegistry';
+import { registerAllCommands } from '../core/commands';
 import { Language } from '../i18n/translations';
 import { highlightCommandLine } from '../core/syntaxHighlighter';
 import { globalSoundEngine } from '../core/soundEngine';
@@ -88,7 +89,10 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
 
     const timer = setTimeout(() => {
       safeFit();
-    }, 50);
+      // Ensure all executable binary symbols are synchronized under /usr/bin/
+      registerAllCommands();
+      globalCommandRegistry.syncAllSymbolsToVFS();
+    }, 100);
 
     const showUbuntuWelcome = () => {
       globalSoundEngine.playLoginSound();

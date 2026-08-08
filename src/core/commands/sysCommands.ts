@@ -70,7 +70,7 @@ Swap:         1024${unit}       0${unit}    1024${unit}\n`,
         stdout: `Filesystem     1K-blocks      Used Available Use% Mounted on
 /dev/root        8388608   1048576   7340032  13% /
 tmpfs             1048576       512   1048064   1% /tmp
-/dev/sda1        41943040   5242880  36690160  13% /home/student\n`,
+/dev/sda1        41943040   5242880  36690160  13% /home/hello\n`,
         stderr: '',
         exitCode: 0,
       };
@@ -81,7 +81,7 @@ tmpfs             1048576       512   1048064   1% /tmp
     description: 'Print effective user name',
     category: 'sys',
     execute: (ctx) => {
-      return { stdout: `${ctx.env['USER'] || 'student'}\n`, stderr: '', exitCode: 0 };
+      return { stdout: `${ctx.env['USER'] || 'hello'}\n`, stderr: '', exitCode: 0 };
     },
   },
   {

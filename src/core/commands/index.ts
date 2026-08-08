@@ -21,6 +21,7 @@ import { themeCommands } from './themeCommands';
 import { archiveSuiteCommands } from './archiveSuiteCommands';
 import { aliasCommands } from './aliasCommands';
 import { findSuiteCommands } from './findSuiteCommands';
+import { vfsCommands } from './vfsCommands';
 
 export function registerAllCommands(): void {
   const allSuites = [
@@ -45,6 +46,7 @@ export function registerAllCommands(): void {
     ...archiveSuiteCommands,
     ...aliasCommands,
     ...findSuiteCommands,
+    ...vfsCommands,
   ];
 
   for (const cmd of allSuites) {

@@ -336,6 +336,7 @@ export class ShellEngine {
         pipeInput,
         processManager: globalProcessManager,
       };
+      globalCommandRegistry.syncAllSymbolsToVFS(globalVFS);
       res = await globalCommandRegistry.execute(cmdName, ctx);
     }
 

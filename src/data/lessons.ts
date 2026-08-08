@@ -40,7 +40,7 @@ export const LESSONS: Lesson[] = [
     hint: '输入 `mkdir workspace`。创建后你可以在右侧文件树实时看到新建的文件夹。',
     commandTarget: 'mkdir workspace',
     checkType: 'file_exists',
-    targetPath: '/home/student/workspace',
+    targetPath: '/home/hello/workspace',
   },
   {
     id: 4,
@@ -50,7 +50,7 @@ export const LESSONS: Lesson[] = [
     hint: '输入 `touch workspace/notes.txt`。',
     commandTarget: 'touch workspace/notes.txt',
     checkType: 'file_exists',
-    targetPath: '/home/student/workspace/notes.txt',
+    targetPath: '/home/hello/workspace/notes.txt',
   },
   {
     id: 5,
@@ -60,7 +60,7 @@ export const LESSONS: Lesson[] = [
     hint: '输入 `chmod 755 welcome.txt`。运行后可以在右侧文件树或 `ls -l welcome.txt` 校验权限变更。',
     commandTarget: 'chmod 755 welcome.txt',
     checkType: 'permission',
-    targetPath: '/home/student/welcome.txt',
+    targetPath: '/home/hello/welcome.txt',
     expectedPermission: 'rwxr-xr-x',
   },
   {
@@ -71,7 +71,7 @@ export const LESSONS: Lesson[] = [
     hint: '输入 `echo "Hello Earendel" > hello.txt`。',
     commandTarget: 'echo "Hello Earendel" > hello.txt',
     checkType: 'file_exists',
-    targetPath: '/home/student/hello.txt',
+    targetPath: '/home/hello/hello.txt',
   },
   {
     id: 7,

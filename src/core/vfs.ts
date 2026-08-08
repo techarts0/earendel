@@ -1,4 +1,5 @@
 // Earendel Linux Virtual File System (VFS) with IndexedDB Persistence
+import { globalCommandRegistry } from './commandRegistry';
 
 export interface VFSNode {
   id: string;
@@ -80,6 +81,9 @@ export class VirtualFileSystem {
     this.mkdir('/usr/share/man', true);
     this.mkdir('/var/log', true);
     this.mkdir('/var/www', true);
+    this.mkdir('/var/cache/apt/archives', true);
+    this.mkdir('/var/lib/dpkg', true);
+    this.mkdir('/var/lib/dpkg/info', true);
 
     this.writeFile('/dev/null', '');
     this.writeFile('/dev/zero', '');
@@ -145,6 +149,11 @@ export class VirtualFileSystem {
       '/etc/group',
       'root:x:0:\nhello:x:1000:hello\nsudo:x:27:hello\n'
     );
+
+    // Sync physical binary symbols to /usr/bin/
+    try {
+      globalCommandRegistry.syncAllSymbolsToVFS();
+    } catch (e) {}
   }
 
   // IndexedDB Auto-Persistence Engine
@@ -180,31 +189,21 @@ export class VirtualFileSystem {
           storedNodes.sort((a, b) => a.path.split('/').length - b.path.split('/').length);
 
           for (const sNode of storedNodes) {
-            if (sNode.path === '/') continue;
-            if (sNode.path.startsWith('/home/student')) continue; // Skip legacy student home
-            if (sNode.path === '/home/hello') continue;
+            if (sNode.path === '/' || sNode.path === '/home/hello') continue;
 
             const existing = this.getNodeByPath(sNode.path);
             if (!existing) {
-              if (sNode.path === '/etc/passwd' && sNode.content?.includes('student:')) {
-                sNode.content = sNode.content.replace(/student:x:1000:1000:student:\/home\/student:\/bin\/bash/g, 'hello:x:1000:1000:hello:/home/hello:/bin/bash');
-              }
-              if (sNode.path === '/etc/shadow' && sNode.content?.includes('student:')) {
-                sNode.content = sNode.content.replace(/student:123456/g, 'hello:123456');
-              }
               this.writeFile(sNode.path, sNode.content ?? '');
               const node = this.getNodeByPath(sNode.path);
               if (node) {
                 node.permissions = sNode.permissions;
-                node.owner = sNode.owner === 'student' ? 'hello' : sNode.owner;
-                node.group = sNode.group === 'student' ? 'hello' : sNode.group;
+                node.owner = sNode.owner;
+                node.group = sNode.group;
               }
-            } else {
-              if (existing.owner === 'student') existing.owner = 'hello';
-              if (existing.group === 'student') existing.group = 'hello';
             }
           }
           this.notify();
+          globalCommandRegistry.syncAllSymbolsToVFS();
         }
       };
     } catch (err) {

@@ -20,17 +20,11 @@ export const aptCommands: Command[] = [
       }
 
       if (sub === 'update') {
-        const updateLog = [
-          'Hit:1 http://archive.ubuntu.com/ubuntu jammy InRelease',
-          'Get:2 http://archive.ubuntu.com/ubuntu jammy-updates InRelease [119 kB]',
-          'Get:3 http://archive.ubuntu.com/ubuntu jammy-backports InRelease [109 kB]',
-          'Fetched 228 kB in 1s (228 kB/s)',
-          'Reading package lists... Done',
-          'Building dependency tree... Done',
-          'Reading state information... Done',
-          'All packages are up to date.',
-        ];
-        return { stdout: updateLog.join('\n') + '\n', stderr: '', exitCode: 0 };
+        return globalPkgManager.updateFromRemoteRepo().then((res) => ({
+          stdout: `${res.log}\n`,
+          stderr: '',
+          exitCode: 0,
+        }));
       }
 
       if (sub === 'list') {
@@ -55,23 +49,36 @@ export const aptCommands: Command[] = [
           };
         }
 
-        const pkgMeta = globalPkgManager.getPackage(targetPkg);
-        if (!pkgMeta) {
-          return { stdout: '', stderr: `E: Unable to locate package ${targetPkg}\n`, exitCode: 100 };
+        return globalPkgManager.installPackage(targetPkg).then((res) => {
+          if (!res.success) {
+            return { stdout: '', stderr: `${res.message}\n`, exitCode: 100 };
+          }
+          const installLog = [
+            'Reading package lists... Done',
+            'Building dependency tree... Done',
+            'Reading state information... Done',
+            `The following NEW packages will be installed:`,
+            `  ${targetPkg}`,
+            `0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.`,
+            res.message,
+          ];
+          return { stdout: installLog.join('\n') + '\n', stderr: '', exitCode: 0 };
+        });
+      }
+
+      if (sub === 'upgrade') {
+        const currentUser = ctx.env['USER'] || 'hello';
+        if (currentUser !== 'root') {
+          return {
+            stdout: '',
+            stderr: `E: Could not open lock file /var/lib/dpkg/lock-frontend - open (13: Permission denied)\nE: Unable to acquire the dpkg frontend lock (/var/lib/dpkg/lock-frontend), are you root?\n`,
+            exitCode: 100,
+          };
         }
 
-        const installLog = [
-          'Reading package lists... Done',
-          'Building dependency tree... Done',
-          'Reading state information... Done',
-          `The following NEW packages will be installed:`,
-          `  ${pkgMeta.name}`,
-          `0 upgraded, 1 newly installed, 0 to remove and 0 not upgraded.`,
-          `Need to get ${pkgMeta.sizeKb} kB of archives.`,
-          `Unpacking ${pkgMeta.name} (${pkgMeta.version}) ...`,
-          globalPkgManager.installPackage(targetPkg).message,
-        ];
-        return { stdout: installLog.join('\n') + '\n', stderr: '', exitCode: 0 };
+        return globalPkgManager.upgradePackages().then((res) => {
+          return { stdout: res.log + '\n', stderr: '', exitCode: res.success ? 0 : 1 };
+        });
       }
 
       if (sub === 'remove' || sub === 'purge') {
@@ -97,16 +104,44 @@ export const aptCommands: Command[] = [
   },
   {
     name: 'dpkg',
-    description: 'package manager for Debian',
+    description: 'package manager for Debian/Earendel',
     category: 'sys',
     execute: (ctx) => {
       if (ctx.args[0] === '-l' || ctx.args[0] === '--list') {
-        const pkgs = globalPkgManager.getAllPackages().filter((p) => p.installed);
+        const statusContent = ctx.vfs.readFile('/var/lib/dpkg/status') || '';
         const header = `Desired=Unknown/Install/Remove/Purge/Hold\n| Status=Not/Inst/Conf-files/Unpacked/halF-conf/Half-inst/trig-aWait/Trig-pend\n|/ Err?=(none)/Reinst-required (Status,Err: uppercase=bad)\n||/ Name           Version      Architecture Description\n+++-==============-============-============-=================================\n`;
-        const lines = pkgs.map((p) => `ii  ${p.name.padEnd(14)} ${p.version.padEnd(12)} amd64        ${p.description}`).join('\n');
-        return { stdout: header + (lines ? lines + '\n' : 'No packages installed.\n'), stderr: '', exitCode: 0 };
+
+        if (!statusContent.trim()) {
+          return { stdout: header + 'No packages installed.\n', stderr: '', exitCode: 0 };
+        }
+
+        // Parse authentic debian control blocks from /var/lib/dpkg/status
+        const blocks = statusContent.split('\n\n').filter(Boolean);
+        const lines: string[] = [];
+
+        blocks.forEach((block) => {
+          const map: Record<string, string> = {};
+          block.split('\n').forEach((line) => {
+            const idx = line.indexOf(':');
+            if (idx > 0) {
+              const k = line.substring(0, idx).trim();
+              const v = line.substring(idx + 1).trim();
+              map[k] = v;
+            }
+          });
+
+          if (map['Package'] && map['Status']?.includes('installed')) {
+            const name = map['Package'].padEnd(14);
+            const ver = (map['Version'] || '1.0.0').padEnd(12);
+            const arch = (map['Architecture'] || 'all').padEnd(12);
+            const desc = map['Description'] || '';
+            lines.push(`ii  ${name} ${ver} ${arch} ${desc}`);
+          }
+        });
+
+        return { stdout: header + lines.join('\n') + '\n', stderr: '', exitCode: 0 };
       }
-      return { stdout: 'dpkg 1.21.1ubuntu2.2 (amd64)\nUse dpkg --help for help.\n', stderr: '', exitCode: 0 };
+      return { stdout: 'dpkg 1.21.1ubuntu2.2 (all)\nUse dpkg --help for help.\n', stderr: '', exitCode: 0 };
     },
   },
 ];
