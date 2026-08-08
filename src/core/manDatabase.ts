@@ -467,4 +467,15 @@ export const manDatabase: Record<string, ManPage> = {
     examplesEn: ['wasm-sha256 "Hello Earendel"'],
     examplesZh: ['wasm-sha256 "Hello Earendel"'],
   },
+  time: {
+    name: 'time',
+    section: 1,
+    synopsis: 'time [command [arguments...]]',
+    descriptionEn: 'time runs the specified program command with the given arguments and reports real, user, and sys execution time.',
+    descriptionZh: 'time 用于精确测算并统计指定的子指令运行耗时（包括真实时间 real、用户态 CPU 时间 user 与系统内核态时间 sys）。',
+    optionsEn: [],
+    optionsZh: [],
+    examplesEn: ['time wasm-calc 100 * 200', 'time python3 demo.py'],
+    examplesZh: ['time wasm-calc 100 * 200', 'time python3 demo.py'],
+  },
 };

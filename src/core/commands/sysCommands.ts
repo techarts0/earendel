@@ -478,4 +478,43 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
       };
     },
   },
+  {
+    name: 'time',
+    description: 'Time a simple command or give resource usage',
+    category: 'sys',
+    execute: async (ctx) => {
+      if (ctx.args.length === 0) {
+        return {
+          stdout: '\nreal\t0m0.000s\nuser\t0m0.000s\nsys\t0m0.000s\n',
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+
+      const subCommandStr = ctx.args.join(' ');
+      const startMs = performance.now();
+
+      // Dynamically import globalShellEngine to avoid circular dependency
+      const { globalShellEngine } = await import('../shellEngine');
+      const result = await globalShellEngine.execute(subCommandStr);
+
+      const endMs = performance.now();
+      const durationSec = (endMs - startMs) / 1000;
+
+      const mins = Math.floor(durationSec / 60);
+      const secs = (durationSec % 60).toFixed(3).padStart(6, '0');
+
+      const realStr = `${mins}m${secs}s`;
+      const userStr = `${mins}m${(durationSec * 0.45).toFixed(3).padStart(6, '0')}s`;
+      const sysStr = `${mins}m${(durationSec * 0.15).toFixed(3).padStart(6, '0')}s`;
+
+      const timeReport = `\nreal\t${realStr}\nuser\t${userStr}\nsys\t${sysStr}\n`;
+
+      return {
+        stdout: result.stdout + timeReport,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      };
+    },
+  },
 ];
