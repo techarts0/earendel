@@ -9,6 +9,8 @@
 
 **Earendel** is an open-source, client-side Linux terminal OS simulator built entirely in pure TypeScript. Running 100% inside your browser without any server backend execution, Earendel provides an authentic Linux TTY environment with virtual file persistence, real-time command chaining, native script interpreters, and geek easter eggs.
 
+👉 **Live Demo**: [http://linux.techarts.cn](http://linux.techarts.cn)
+
 ---
 
 ## 🌟 Key Highlights
