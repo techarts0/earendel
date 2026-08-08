@@ -130,11 +130,8 @@ export class WasmRuntimeEngine {
 
         if (cmdName.includes('sha256') || argStr.includes('sha256')) {
           const text = ctx.args.filter((a) => a !== 'wasm-sha256').join(' ') || 'Hello Earendel';
-          const encoder = new TextEncoder();
-          const data = encoder.encode(text);
-          const hashBuffer = await crypto.subtle.digest('SHA-256', data);
-          const hashArray = Array.from(new Uint8Array(hashBuffer));
-          const sha256Hex = hashArray.map((b) => b.toString(16).padStart(2, '0')).join('');
+          const { globalVFSImageEngine } = await import('./vfsImageEngine');
+          const sha256Hex = await globalVFSImageEngine.sha256(text);
 
           stdoutBuffer = [
             `\x1b[1;36m[WASI Engine: Rust Native Crypto Core]\x1b[0m`,
