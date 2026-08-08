@@ -123,7 +123,7 @@ export class VirtualFileSystem {
 
     this.writeFile(
       '/etc/os-release',
-      'NAME="Ubuntu"\nVERSION="22.04.3 LTS (Jammy Jellyfish)"\nID=ubuntu\nPRETTY_NAME="Earendel Linux Terminal Alpha"\n'
+      'NAME="Earendel"\nVERSION="0.1.1"\nID=ubuntu\nPRETTY_NAME="Earendel Linux Terminal Alpha"\n'
     );
 
     this.writeFile(
