@@ -1,63 +1,69 @@
 # 🌌 Earendel - Pure TypeScript Web Linux Terminal
 
-> **A browser-native, zero-backend, ultra-realistic Linux terminal emulator designed for education, interactive learning, and geek culture.**
+> **The zero-backend, 100% browser-native Linux OS simulator built for modern computer science education, interactive labs, and tech embedding.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![React](https://img.shields.io/badge/React-18.0+-61dafb?logo=react)](https://react.dev/)
 [![Vite](https://img.shields.io/badge/Vite-5.0+-646cff?logo=vite)](https://vitejs.dev/)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/techarts0/earendel/pulls)
 
-**Earendel** is an open-source, client-side Linux terminal OS simulator built entirely in pure TypeScript. Running 100% inside your browser without any server backend execution, Earendel provides an authentic Linux TTY environment with virtual file persistence, real-time command chaining, native script interpreters, and geek easter eggs.
+**Earendel** is an ultra-lightweight, zero-cost-to-host Linux terminal emulator written in pure TypeScript. Designed to solve the traditional headaches of OS labs—such as heavy VMware setups, server maintenance costs, and broken student environments—Earendel delivers a complete Linux TTY experience directly in the browser with **instant boot, 0s latency, and 100% client-side privacy.**
 
-👉 **Live Demo**: [http://linux.techarts.cn](http://linux.techarts.cn)
+👉 **Live Demo**: [http://linux.techarts.cn](http://linux.techarts.cn)  
+*(Default Credentials: Username `hello` | Password `123456`)*
 
 ---
 
-## 🌟 Key Highlights
+## 💡 Why Earendel? (The EdTech Pain Points Solved)
 
-- **⚡ 100% Pure Client-Side Execution**: Zero backend server overhead. All command evaluations, AST parsing, and shell operations execute inside browser WebAssembly & V8 engines.
-- **🐧 Official Linux FHS & Persistent VFS**: Fully implemented **Filesystem Hierarchy Standard** (`/bin`, `/boot`, `/dev`, `/etc`, `/home`, `/lib`, `/opt`, `/usr`, `/var`). Includes IndexDB persistence and `/var/log/syslog` boot logs.
-- **🐳 Virtual Docker Container Suite**: Emulates Docker CLI (`docker ps`, `docker ps -a`, `docker images`, `docker run -it`, `docker stop`, `docker rm`).
-- **🐍 Native Python 3 & Node.js Runtimes**: Execute `.py` files with loops, variables, and math, or run `.js` scripts directly on browser V8 with custom `console.log` and `process.argv` handling.
-- **🖥️ `tmux` Terminal Window Multiplexer**: Split your browser screen vertically (`tmux split`) or horizontally (`tmux split-h`) into multiple independent active terminal sessions.
-- **💾 Time-Machine Snapshot Engine**: Create full VFS state snapshots (`snapshot save init`) and restore/rollback your system instantly (`snapshot restore init`).
-- **🔥 Netfilter Firewall (`ufw` & `iptables`)**: Simulate network security rules blocking dynamic `curl` or `ping` requests in real-time.
-- **🎨 5 Sleek Terminal Color Presets**: Switch instantly with `theme` between `default`, `matrix`, `dracula`, `cyberpunk`, and `monokai`.
-- **💖 Geek Easter Eggs**:
-  - `tell <name>`: Express feelings with neon ANSI ASCII fireworks!
-  - `rm -rf /`: Protected by Earendel Failsafe Protocol nuclear bomb easter egg!
-  - `sl`: Classic steam locomotive animation.
-  - `figlet`: 3D ASCII banner font generator.
+| Traditional Linux Labs (VMware / AWS Cloud Shell) | The Earendel Advantage |
+| :--- | :--- |
+| ❌ High server costs ($100s/mo for backend VM clusters) | **⚡ $0 Server Cost**: Runs 100% on student's browser CPU/Memory |
+| ❌ Complex setup (VMware, BIOS virtualization errors) | **🚀 Zero Setup**: Open a URL, start learning in 3 seconds |
+| ❌ Risk of broken environments & system crashes | **🛡️ One-Click Reset**: Instant VFS snapshot rollback |
+| ❌ Privacy & Security concerns with shared servers | **🔒 Completely Isolated**: Local IndexedDB storage, zero server leakage |
+
+---
+
+## 🌟 Key Features & Highlights
+
+### 🎓 1. Built for CS & Linux Education
+- **FHS & Persistent VFS**: Fully implemented **Filesystem Hierarchy Standard** (`/bin`, `/boot`, `/dev`, `/etc`, `/home`, `/lib`, `/opt`, `/usr`, `/var`) with IndexedDB persistence and `/var/log/syslog` boot logs.
+- **Time-Machine Snapshots**: Save (`snapshot save init`) and restore/rollback state instantly in milliseconds if students mess up the environment.
+- **Native Python 3 & Node.js Runtimes**: Execute `.py` files with loops, variables, and math, or run `.js` scripts directly on browser V8 with custom `console.log` and `process.argv` handling.
+
+### 🐧 2. Rich CLI & Real-Time Subsystems
+- **Virtual Docker Suite**: Emulates Docker CLI (`docker ps`, `docker ps -a`, `docker images`, `docker run -it`, `docker stop`, `docker rm`).
+- **Netfilter Firewall (`ufw` & `iptables`)**: Simulate network security rules blocking dynamic `curl` or `ping` requests in real-time.
+- **`tmux` Terminal Window Multiplexer**: Split your browser screen vertically (`tmux split`) or horizontally (`tmux split-h`) into multiple independent active terminal sessions.
+- **Geek Easter Eggs**: Includes `tell <name>` (ANSI ASCII fireworks), `rm -rf /` (nuclear bomb failsafe easter egg), `sl` (steam locomotive animation), and `figlet` (3D ASCII banner font generator).
+
+### 🎨 3. Highly Customizable & Embeddable
+- **5 Sleek Color Themes**: Switch instantly with `theme` between `default`, `matrix`, `dracula`, `cyberpunk`, and `monokai`.
+- **Easy Web Embedding**: Packaged as an iframe or React component for LMS (Canvas, Moodle) or technical blogs.
 
 ---
 
 ## 🚀 Quick Start
 
-### Prerequisites
-- [Node.js](https://nodejs.org/) (v16.0 or higher)
-- [npm](https://www.npmjs.com/) or [pnpm](https://pnpm.io/)
+### For Developers
 
-### Installation & Local Run
-
-```bash
-# Clone the repository
 git clone https://github.com/techarts0/earendel.git
-
-# Navigate into the project directory
 cd earendel
-
-# Install dependencies
 npm install
-
-# Start local development server
 npm run dev
-```
 
 Open your browser and visit `http://localhost:3000`. Login with username `hello` and password `123456`!
 
+### For Educators & Bloggers (Embed in 1 Minute)
+Simply embed Earendel into your online course, documentation, or blog via Iframe:
+
+<iframe src="http://linux.techarts.cn" width="100%" height="600px" frameborder="0"></iframe>
+
 ---
 
-## 💻 Supported Commands Overview
+## 💻 Supported Commands Matrix
 
 | Category | Commands |
 | :--- | :--- |
@@ -72,31 +78,24 @@ Open your browser and visit `http://localhost:3000`. Login with username `hello`
 
 ---
 
-## 🛠️ System Architecture
+## 🏢 Enterprise & Commercial Use (EdTech / B2B)
 
-```mermaid
-graph TD
-    A[Browser Client / UI] --> B[xterm.js Terminal Renderer]
-    B --> C[ShellEngine AST & Alias Parser]
-    C --> D[Command Registry & Dispatcher]
-    D --> E[Pure TS Linux Subsystems]
-    
-    E --> F[VFS Filesystem & IndexedDB]
-    E --> G[Process & Job Manager]
-    E --> H[Netfilter Firewall Engine]
-    E --> I[Docker Container Engine]
-    E --> J[Python & JS Runtimes]
-    E --> K[Time-Machine Snapshot Engine]
-```
+Looking to integrate Earendel into your university, bootcamp, or commercial learning platform?
+
+- **Custom Interactive Courses**: Pre-define files, labs, and interactive step-by-step terminal challenges.
+- **LMS Integration**: Webhook/API hookups for automated assignment grading and submission.
+- **White-Labeling**: Custom branding, default themes, and pre-installed toolchains.
+
+📩 **Contact for Institutional Support**: Open a [GitHub Discussion](https://github.com/techarts0/earendel/discussions) or reach out directly.
 
 ---
 
 ## 📜 License
 
-Distributed under the **MIT License**. See `LICENSE` for more information.
+Distributed under the **MIT License**. Free for personal, educational, and commercial use.
 
 ---
 
-<p center="align">
+<p align="center">
   <i>Crafted with ❤️ for students, terminal lovers, and geek culture enthusiasts worldwide.</i>
 </p>
