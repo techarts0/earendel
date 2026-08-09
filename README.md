@@ -72,8 +72,8 @@ Simply embed Earendel into your online course, documentation, or blog via Iframe
 | **Interpreters** | `python3` (or `python`), `node` (or `js`) |
 | **Text Editors** | `vi` (or `vim`), `nano` |
 | **Networking & Security** | `ping`, `curl`, `ufw`, `iptables`, `tcpdump`, `traceroute`, `ssh`, `ssh-keygen`, `mesh` |
-| **Container & Process** | `docker`, `ps`, `top`, `htop`, `worker`, `kill`, `systemctl`, `apt`, `df`, `free`, `uptime`, `time` |
-| **Multiplexer & Snapshot**| `tmux`, `snapshot` (`backup`, `restore`) |
+| **Container & Process** | `docker`, `ps`, `top`, `htop`, `worker`, `kill`, `systemctl`, `apt`, `df`, `free`, `uptime`, `time`, `crontab` |
+| **Multiplexer & Snapshot**| `tmux`, `snapshot` (`backup`, `restore`), `display`, `fbset`, `fbclear` |
 | **Geek & Customization** | `theme`, `sound`, `man`, `alias`, `unalias`, `cheat`, `tell`, `sl`, `figlet` |
 
 ---

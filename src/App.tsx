@@ -4,6 +4,8 @@ import { NanoEditorModal } from './components/NanoEditorModal';
 import { ViEditorModal } from './components/ViEditorModal';
 import { CheatSheetModal } from './components/CheatSheetModal';
 
+import { FramebufferModal } from './components/FramebufferModal';
+
 export function App() {
   const [nanoModal, setNanoModal] = useState<{ path: string; content: string } | null>(null);
   const [viModal, setViModal] = useState<{ path: string; content: string } | null>(null);
@@ -84,6 +86,9 @@ export function App() {
       {showCheatModal && (
         <CheatSheetModal onClose={() => setShowCheatModal(false)} />
       )}
+
+      {/* Framebuffer Canvas View Modal */}
+      <FramebufferModal />
     </div>
   );
 }

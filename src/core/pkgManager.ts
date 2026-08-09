@@ -114,7 +114,7 @@ class PkgManager {
           description: 'Configurable speaking cow in ASCII art',
           category: 'text',
           execute: (ctx) => {
-            const msg = ctx.args.join(' ') || 'Moo! Hello Earendel Web OS!';
+            const msg = ctx.args.join(' ') || 'Moo! I love you!';
             const len = msg.length + 2;
             const border = '-'.repeat(len);
             const cow = [
@@ -534,7 +534,7 @@ class PkgManager {
         try {
           const meta = JSON.parse(infoStr);
           storedVer = meta.version || localVer;
-        } catch (e) {}
+        } catch (e) { }
       }
 
       // Check if remote version is higher
