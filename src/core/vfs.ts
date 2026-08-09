@@ -1,5 +1,6 @@
 // Earendel Linux Virtual File System (VFS) with IndexedDB Persistence
 import { globalCommandRegistry } from './commandRegistry';
+import { globalHostMountEngine } from './hostMountEngine';
 
 export interface VFSNode {
   id: string;
@@ -193,9 +194,14 @@ export class VirtualFileSystem {
 
             const existing = this.getNodeByPath(sNode.path);
             if (!existing) {
-              this.writeFile(sNode.path, sNode.content ?? '');
+              if (sNode.type === 'directory') {
+                this.mkdir(sNode.path, true);
+              } else {
+                this.writeFile(sNode.path, sNode.content ?? '');
+              }
               const node = this.getNodeByPath(sNode.path);
               if (node) {
+                node.type = sNode.type;
                 node.permissions = sNode.permissions;
                 node.owner = sNode.owner;
                 node.group = sNode.group;
@@ -306,11 +312,41 @@ export class VirtualFileSystem {
     const parts = absPath.split('/').filter(Boolean);
     let curr = this.root;
 
-    for (const part of parts) {
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
       if (curr.type !== 'directory' || !curr.children) return null;
-      const next = curr.children.get(part);
-      if (!next) return null;
+      let next = curr.children.get(part);
+
+      // If missing in VFS memory tree, check if managed by HostMountEngine
+      if (!next) {
+        const subPath = '/' + parts.slice(0, i + 1).join('/');
+        const match = globalHostMountEngine.getMatchingMount(subPath);
+        if (match) {
+          const isMountRoot = match.relativePath === '';
+          const isFile = !isMountRoot && match.relativePath.includes('.');
+          next = {
+            id: 'host_' + Math.random().toString(36).substring(2, 9),
+            name: part,
+            type: isFile ? 'file' : 'directory',
+            permissions: isFile ? 'rw-r--r--' : 'rwxr-xr-x',
+            owner: 'hello',
+            group: 'hello',
+            size: 4096,
+            updatedAt: new Date(),
+            children: isFile ? undefined : (next?.children || new Map()),
+            parent: curr,
+          };
+          curr.children.set(part, next);
+        } else {
+          return null;
+        }
+      }
       curr = next;
+    }
+
+    // Trigger host physical directory scan and sync if node is a mounted host directory
+    if (curr.type === 'directory' && globalHostMountEngine.getMatchingMount(absPath)) {
+      globalHostMountEngine.syncHostDirectoryToVFS(absPath, curr);
     }
 
     return curr;
@@ -320,6 +356,11 @@ export class VirtualFileSystem {
     const absPath = this.resolvePath(pathStr);
     const parts = absPath.split('/').filter(Boolean);
     let curr = this.root;
+
+    // Create real physical directory if under host mount point
+    if (globalHostMountEngine.getMatchingMount(absPath)) {
+      globalHostMountEngine.createDirectory(absPath);
+    }
 
     for (let i = 0; i < parts.length; i++) {
       const part = parts[i];
@@ -359,6 +400,13 @@ export class VirtualFileSystem {
     const dirPath = absPath.substring(0, lastSlashIndex) || '/';
     const fileName = absPath.substring(lastSlashIndex + 1);
 
+    // Sync to Host FileSystem if path is under host mount point
+    try {
+      if (globalHostMountEngine.getMatchingMount(absPath)) {
+        globalHostMountEngine.writeFile(absPath, content);
+      }
+    } catch (e) {}
+
     const dirNode = this.getNodeByPath(dirPath);
     if (!dirNode || dirNode.type !== 'directory' || !dirNode.children) {
       return false;
@@ -392,7 +440,9 @@ export class VirtualFileSystem {
   }
 
   readFile(pathStr: string): string | null {
-    const node = this.getNodeByPath(pathStr);
+    const absPath = this.resolvePath(pathStr);
+
+    const node = this.getNodeByPath(absPath);
     if (node && node.type === 'file') {
       return node.content ?? '';
     }
@@ -401,6 +451,12 @@ export class VirtualFileSystem {
 
   remove(pathStr: string, recursive = false): boolean {
     const absPath = this.resolvePath(pathStr);
+
+    // Sync removal to Host PC physical disk if under host mount point
+    if (globalHostMountEngine.getMatchingMount(absPath)) {
+      globalHostMountEngine.removeEntry(absPath);
+    }
+
     const node = this.getNodeByPath(absPath);
     if (!node || !node.parent || node === this.root) return false;
 
@@ -415,11 +471,21 @@ export class VirtualFileSystem {
   }
 
   changeDirectory(pathStr: string): boolean {
-    const target = this.getNodeByPath(pathStr);
-    if (target && target.type === 'directory') {
-      this.currentDirectory = target;
-      this.notify();
-      return true;
+    const absPath = this.resolvePath(pathStr);
+    const target = this.getNodeByPath(absPath);
+
+    if (target) {
+      const match = globalHostMountEngine.getMatchingMount(absPath);
+      if (match && match.relativePath === '') {
+        target.type = 'directory';
+        if (!target.children) target.children = new Map();
+      }
+
+      if (target.type === 'directory') {
+        this.currentDirectory = target;
+        this.notify();
+        return true;
+      }
     }
     return false;
   }

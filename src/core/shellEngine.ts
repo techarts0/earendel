@@ -267,6 +267,23 @@ export class ShellEngine {
 
   private async executeSingleCommand(cmdStr: string, pipeInput: string = ''): Promise<ExecutionResult> {
     let rawCmd = cmdStr.trim();
+
+    // Check if in active P2P Mesh Subshell session
+    const { globalP2PMeshEngine } = await import('./p2pMeshEngine');
+    const joinedPeerId = globalP2PMeshEngine.getActiveJoinedPeerId();
+
+    if (joinedPeerId) {
+      const isDisconnectCmd =
+        rawCmd === 'exit' ||
+        rawCmd === 'mesh stop' ||
+        rawCmd === 'mesh disconnect' ||
+        rawCmd === 'mesh unshare' ||
+        rawCmd.startsWith('mesh status');
+
+      if (!isDisconnectCmd) {
+        return await globalP2PMeshEngine.executeOnHost(joinedPeerId, rawCmd);
+      }
+    }
     let redirectTarget: string | null = null;
     let appendMode = false;
 

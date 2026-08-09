@@ -67,11 +67,11 @@ Simply embed Earendel into your online course, documentation, or blog via Iframe
 
 | Category | Commands |
 | :--- | :--- |
-| **File Management** | `ls`, `pwd`, `cd`, `cat`, `touch`, `mkdir`, `rm`, `cp`, `mv`, `head`, `tail`, `wc`, `find`, `which`, `whereis`, `locate` |
+| **File Management** | `ls`, `pwd`, `cd`, `cat`, `touch`, `mkdir`, `rm`, `cp`, `mv`, `head`, `tail`, `wc`, `find`, `which`, `whereis`, `locate`, `mount`, `umount`, `xclip` |
 | **Permissions & Users** | `chmod`, `chown`, `whoami`, `who`, `id`, `useradd`, `userdel`, `su`, `sudo`, `login`, `umask` |
 | **Interpreters** | `python3` (or `python`), `node` (or `js`) |
 | **Text Editors** | `vi` (or `vim`), `nano` |
-| **Networking & Security** | `ping`, `curl`, `ufw`, `iptables`, `tcpdump`, `traceroute` |
+| **Networking & Security** | `ping`, `curl`, `ufw`, `iptables`, `tcpdump`, `traceroute`, `ssh`, `ssh-keygen`, `mesh` |
 | **Container & Process** | `docker`, `ps`, `top`, `kill`, `systemctl`, `apt`, `df`, `free`, `uptime`, `time` |
 | **Multiplexer & Snapshot**| `tmux`, `snapshot` (`backup`, `restore`) |
 | **Geek & Customization** | `theme`, `sound`, `man`, `alias`, `unalias`, `cheat`, `tell`, `sl`, `figlet` |

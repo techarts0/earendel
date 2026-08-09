@@ -10,6 +10,7 @@ import { Language } from '../i18n/translations';
 import { highlightCommandLine } from '../core/syntaxHighlighter';
 import { globalSoundEngine } from '../core/soundEngine';
 import { globalThemeManager, THEME_PRESETS } from '../core/themeManager';
+import { globalP2PMeshEngine } from '../core/p2pMeshEngine';
 
 interface TerminalProps {
   onOpenNano?: (nanoData: { path: string; content: string }) => void;
@@ -32,21 +33,29 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
   const historyIndexRef = useRef<number>(-1);
 
   const promptStr = () => {
-    const user = globalShellEngine.getEnv('USER') || 'hello';
     const pwd = globalVFS.getPwd();
-    const userHome = globalShellEngine.getEnv('HOME') || (user === 'root' ? '/root' : `/home/${user}`);
-
+    const user = globalShellEngine.getEnv('USER') || 'hello';
+    const home = globalShellEngine.getEnv('HOME') || '/home/hello';
     let shortPwd = pwd;
-    if (pwd === userHome) {
+
+    if (pwd === home) {
       shortPwd = '~';
-    } else if (pwd.startsWith(userHome + '/')) {
-      shortPwd = '~' + pwd.slice(userHome.length);
+    } else if (pwd.startsWith(home + '/')) {
+      shortPwd = '~' + pwd.slice(home.length);
     }
 
     const isRoot = user === 'root';
     const symbol = isRoot ? '#' : '$';
     const userColor = isRoot ? '\x1b[1;31m' : '\x1b[1;32m';
-    return `${userColor}${user}@earendel\x1b[0m:\x1b[1;34m${shortPwd}\x1b[0m${symbol} `;
+
+    const joinedPeerId = globalP2PMeshEngine.getActiveJoinedPeerId();
+    const hostname = joinedPeerId
+      ? joinedPeerId.startsWith('peer-earendel-')
+        ? joinedPeerId.replace('peer-earendel-', 'peer-')
+        : joinedPeerId
+      : 'earendel';
+
+    return `${userColor}${user}@${hostname}\x1b[0m:\x1b[1;34m${shortPwd}\x1b[0m${symbol} `;
   };
 
   useEffect(() => {
@@ -112,6 +121,29 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
     }
 
     const disposable = term.onData(async (key) => {
+      // Hotkey Ctrl+Shift+C (Copy)
+      if (key === '\x03' && term.hasSelection()) {
+        const selectedText = term.getSelection();
+        if (selectedText && navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(selectedText);
+        }
+        return;
+      }
+
+      // Hotkey Ctrl+Shift+V (Paste)
+      if (key === '\x16') {
+        if (navigator.clipboard && navigator.clipboard.readText) {
+          try {
+            const clipText = await navigator.clipboard.readText();
+            if (clipText) {
+              inputBufferRef.current += clipText;
+              term.write(clipText);
+            }
+          } catch (e) {}
+        }
+        return;
+      }
+
       if (key === '\r' || key === '\n') {
         globalSoundEngine.playEnterSound();
         historyIndexRef.current = -1;
