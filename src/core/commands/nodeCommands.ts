@@ -1,4 +1,5 @@
 import { Command } from '../types';
+import { globalJsEngine } from '../jsRuntime';
 
 export const nodeCommands: Command[] = [
   {
@@ -6,7 +7,7 @@ export const nodeCommands: Command[] = [
     aliases: ['js'],
     description: 'Node.js JavaScript runtime environment',
     category: 'sys',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       const targetFile = ctx.args.find((a) => !a.startsWith('-'));
 
       if (!targetFile) {
@@ -22,41 +23,7 @@ export const nodeCommands: Command[] = [
         return { stdout: '', stderr: `node: internal/modules/cjs/loader: No such file: ${targetFile}\n`, exitCode: 1 };
       }
 
-      let stdoutAcc = '';
-      let stderrAcc = '';
-      let exitCode = 0;
-
-      const scriptArgs = ctx.args.slice(ctx.args.indexOf(targetFile) + 1);
-
-      // Custom Sandbox Console & Process
-      const customConsole = {
-        log: (...args: any[]) => {
-          stdoutAcc += args.map((a) => (typeof a === 'object' ? JSON.stringify(a, null, 2) : String(a))).join(' ') + '\n';
-        },
-        error: (...args: any[]) => {
-          stderrAcc += args.map((a) => String(a)).join(' ') + '\n';
-        },
-        warn: (...args: any[]) => {
-          stdoutAcc += '[WARN] ' + args.map((a) => String(a)).join(' ') + '\n';
-        },
-      };
-
-      const customProcess = {
-        argv: ['node', targetFile, ...scriptArgs],
-        env: ctx.env,
-      };
-
-      try {
-        const fn = new Function('console', 'process', 'require', node.content || '');
-        fn(customConsole, customProcess, () => {
-          throw new Error('Module require is not implemented in sandbox.');
-        });
-      } catch (err: any) {
-        stderrAcc += `${err.name || 'Uncaught Error'}: ${err.message || String(err)}\n`;
-        exitCode = 1;
-      }
-
-      return { stdout: stdoutAcc, stderr: stderrAcc, exitCode };
+      return await globalJsEngine.executeJsBundle(node.content || '', ctx);
     },
   },
 ];

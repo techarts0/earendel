@@ -1,6 +1,14 @@
-// Earendel Micro Python 3 Evaluator Engine
+import { syscall } from '../kernel/syscall';
+import { SyscallNo } from '../kernel/types';
+import { globalVMPageTable } from '../kernel/vmPageTable';
+
 export class PythonEngine {
-  public executeScript(codeText: string, args: string[] = []): { stdout: string; stderr: string; exitCode: number } {
+  public async executeScript(codeText: string, args: string[] = []): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+    // POSIX Process Lifecycle: SYS_FORK -> allocate 4KB Page -> Execution -> SYS_EXIT
+    const forkRes = await syscall(SyscallNo.SYS_FORK, 'python3', '/home/hello');
+    const childPid = forkRes.data || 301;
+    globalVMPageTable.allocatePage(Math.floor(childPid / 10));
+
     let stdoutAcc = '';
     let stderrAcc = '';
     const lines = codeText.split('\n');
@@ -74,9 +82,11 @@ export class PythonEngine {
       }
     } catch (err: any) {
       stderrAcc += `Traceback (most recent call last):\n  File "script.py", line ${i + 1}\nSyntaxError: ${err.message || 'invalid syntax'}\n`;
+      await syscall(SyscallNo.SYS_EXIT, childPid);
       return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: 1 };
     }
 
+    await syscall(SyscallNo.SYS_EXIT, childPid);
     return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: 0 };
   }
 

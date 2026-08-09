@@ -128,7 +128,7 @@ export class VirtualFileSystem {
 
     this.writeFile(
       '/etc/os-release',
-      'NAME="Earendel"\nVERSION="0.1.1"\nID=ubuntu\nPRETTY_NAME="Earendel Linux Terminal Alpha"\n'
+      'NAME="Earendel"\nVERSION="0.1.1"\nID=ubuntu\nPRETTY_NAME="Earendel POSIX WebOS"\n'
     );
 
     this.writeFile(
@@ -154,7 +154,7 @@ export class VirtualFileSystem {
     // Sync physical binary symbols to /usr/bin/
     try {
       globalCommandRegistry.syncAllSymbolsToVFS();
-    } catch (e) {}
+    } catch (e) { }
   }
 
   // IndexedDB Auto-Persistence Engine
@@ -405,7 +405,7 @@ export class VirtualFileSystem {
       if (globalHostMountEngine.getMatchingMount(absPath)) {
         globalHostMountEngine.writeFile(absPath, content);
       }
-    } catch (e) {}
+    } catch (e) { }
 
     const dirNode = this.getNodeByPath(dirPath);
     if (!dirNode || dirNode.type !== 'directory' || !dirNode.children) {

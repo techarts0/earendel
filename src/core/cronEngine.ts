@@ -125,9 +125,16 @@ export class CronEngine {
 
   private async executeCronJob(job: CronJobEntry) {
     try {
+      const { syscall } = await import('../kernel/syscall');
+      const { SyscallNo } = await import('../kernel/types');
+      const forkRes = await syscall(SyscallNo.SYS_FORK, `cron: ${job.command}`, '/home/hello');
+      const childPid = forkRes.data || 501;
+
       const { globalShellEngine } = await import('./shellEngine');
       job.lastRunTimestamp = Date.now();
       await globalShellEngine.execute(job.command);
+
+      await syscall(SyscallNo.SYS_EXIT, childPid);
     } catch (e) { }
   }
 

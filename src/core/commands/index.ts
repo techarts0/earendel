@@ -25,6 +25,10 @@ import { vfsCommands } from './vfsCommands';
 import { mountCommands } from './mountCommands';
 import { cronCommands } from './cronCommands';
 import { graphicsCommands } from './graphicsCommands';
+import { dmesgCommand } from './dmesgCommand';
+import { moduleCommands } from './moduleCommands';
+import { kdbCommands } from './kdbCommands';
+import { eccCommand } from './eccCommand';
 
 export function registerAllCommands(): void {
   const allSuites = [
@@ -53,6 +57,10 @@ export function registerAllCommands(): void {
     ...mountCommands,
     ...cronCommands,
     ...graphicsCommands,
+    ...moduleCommands,
+    ...kdbCommands,
+    dmesgCommand,
+    eccCommand,
   ];
 
   for (const cmd of allSuites) {

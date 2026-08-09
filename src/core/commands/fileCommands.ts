@@ -1,6 +1,8 @@
 // Behavioral File System Commands for Earendel
 import { Command, ExecutionContext, ExecutionResult } from '../types';
 import { VFSNode } from '../vfs';
+import { syscall } from '../../kernel/syscall';
+import { SyscallNo } from '../../kernel/types';
 
 export const fileCommands: Command[] = [
   {
@@ -89,16 +91,16 @@ export const fileCommands: Command[] = [
       return { stdout: '', stderr: '', exitCode: 0 };
     },
   },
+
   {
     name: 'touch',
     description: 'Change file timestamps or create empty file',
     category: 'file',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       if (ctx.args.length === 0) return { stdout: '', stderr: 'touch: missing operand\n', exitCode: 1 };
       for (const filename of ctx.args) {
         if (!filename.startsWith('-')) {
-          const content = ctx.vfs.readFile(filename) ?? '';
-          ctx.vfs.writeFile(filename, content);
+          await syscall(SyscallNo.SYS_WRITE, filename, '');
         }
       }
       return { stdout: '', stderr: '', exitCode: 0 };
@@ -108,7 +110,7 @@ export const fileCommands: Command[] = [
     name: 'cat',
     description: 'Concatenate files and print on standard output',
     category: 'file',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       if (ctx.pipeInput) {
         return { stdout: ctx.pipeInput, stderr: '', exitCode: 0 };
       }
@@ -117,15 +119,11 @@ export const fileCommands: Command[] = [
       }
       let out = '';
       for (const arg of ctx.args) {
-        const node = ctx.vfs.getNodeByPath(arg);
-        if (!node) {
+        const readRes = await syscall(SyscallNo.SYS_READ, arg);
+        if (readRes.code !== 0 || readRes.data === null || readRes.data === undefined) {
           return { stdout: '', stderr: `cat: ${arg}: No such file or directory\n`, exitCode: 1 };
         }
-        // Permission check! If read permission 'r' is missing
-        if (!node.permissions.includes('r')) {
-          return { stdout: '', stderr: `cat: ${arg}: Permission denied\n`, exitCode: 1 };
-        }
-        out += node.content ?? '';
+        out += readRes.data ?? '';
       }
       return { stdout: out.endsWith('\n') ? out : out + '\n', stderr: '', exitCode: 0 };
     },

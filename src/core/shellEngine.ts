@@ -4,6 +4,8 @@ import { globalProcessManager } from './processManager';
 import { globalCommandRegistry } from './commandRegistry';
 import { ExecutionContext, ExecutionResult } from './types';
 import { Language } from '../i18n/translations';
+import { syscall } from '../kernel/syscall';
+import { SyscallNo } from '../kernel/types';
 import './commands'; // Ensure all command plugins are auto-registered
 
 export class ShellEngine {
@@ -314,8 +316,8 @@ export class ShellEngine {
 
     let res: ExecutionResult = { stdout: '', stderr: '', exitCode: 0 };
 
-    // Native script / binary executable path execution
-    if (cmdName.startsWith('./') || cmdName.startsWith('/') || cmdName.endsWith('.sh')) {
+    // Native script / EAF binary executable path execution via POSIX fork() -> execve() -> waitpid()
+    if (cmdName.startsWith('./') || cmdName.startsWith('/') || cmdName.endsWith('.sh') || cmdName.endsWith('.eaf')) {
       const scriptPath = cmdName;
       const node = globalVFS.getNodeByPath(scriptPath);
 
@@ -324,8 +326,54 @@ export class ShellEngine {
       } else if (!globalVFS.isExecutable(scriptPath)) {
         res = { stdout: '', stderr: `-bash: ${cmdName}: Permission denied\n`, exitCode: 126 };
       } else {
-        const scriptContent = globalVFS.readFile(scriptPath) ?? '';
-        res = await this.executeControlFlow(scriptContent, [scriptPath, ...cmdArgs]);
+        // POSIX Process Lifecycle: SYS_FORK -> SYS_EXECVE -> SYS_WAITPID
+        const forkRes = await syscall(SyscallNo.SYS_FORK, scriptPath, globalVFS.getPwd());
+        const childPid = forkRes.data || 401;
+        await syscall(SyscallNo.SYS_EXECVE, scriptPath, cmdArgs);
+
+        const content = globalVFS.readFile(scriptPath) ?? '';
+
+        // Check for EAF Magic Header (EAF01 or EAF\x01)
+        const isEaf = scriptPath.endsWith('.eaf') || content.includes('"magic"') && content.includes('EAF');
+
+        if (isEaf) {
+          try {
+            const eafObj = JSON.parse(content);
+            const arch = eafObj.header?.arch || 'js-vm';
+            const textSection = eafObj.sections?.['.text'] || '';
+
+            if (arch === 'wasm32') {
+              const { globalWasmEngine } = await import('./wasmRuntime');
+              const wasmBytes = new TextEncoder().encode(textSection);
+              const ctx: ExecutionContext = {
+                vfs: globalVFS,
+                env: this.env,
+                lang: this.lang,
+                args: cmdArgs,
+                pipeInput,
+                processManager: globalProcessManager,
+              };
+              res = await globalWasmEngine.executeWasm(wasmBytes, ctx);
+            } else {
+              const { globalJsEngine } = await import('./jsRuntime');
+              const ctx: ExecutionContext = {
+                vfs: globalVFS,
+                env: this.env,
+                lang: this.lang,
+                args: cmdArgs,
+                pipeInput,
+                processManager: globalProcessManager,
+              };
+              res = await globalJsEngine.executeJsBundle(textSection, ctx);
+            }
+          } catch (e: any) {
+            res = { stdout: '', stderr: `execve: Exec format error: ${e.message}\n`, exitCode: 126 };
+          }
+        } else {
+          res = await this.executeControlFlow(content, [scriptPath, ...cmdArgs]);
+        }
+
+        await syscall(SyscallNo.SYS_WAITPID, childPid);
       }
     } else {
       const ctx: ExecutionContext = {

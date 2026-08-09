@@ -1,4 +1,5 @@
 // Earendel Real Browser Telemetry Engine (Performance, Storage Estimate, WebWorker Monitoring)
+import { globalTaskScheduler } from '../kernel/taskScheduler';
 export interface RealMemoryMetrics {
   totalMB: number;
   usedMB: number;
@@ -45,15 +46,27 @@ export class WebTelemetryEngine {
       worker: null,
       startTime: new Date(),
     });
-    this.registeredWorkers.set('sound_engine', {
-      pid: 102,
-      name: 'web-audio-daemon (sound)',
+    this.registeredWorkers.set('vfsd', {
+      pid: 2,
+      name: '[vfsd] User-space VFS Daemon (Worker)',
       worker: null,
       startTime: new Date(),
     });
-    this.registeredWorkers.set('p2p_mesh', {
-      pid: 108,
-      name: 'earendel-mesh-daemon (p2p)',
+    this.registeredWorkers.set('pmd', {
+      pid: 3,
+      name: '[pmd] User-space Process Daemon (Worker)',
+      worker: null,
+      startTime: new Date(),
+    });
+    this.registeredWorkers.set('driverd', {
+      pid: 4,
+      name: '[driverd] User-space Device Driver Daemon',
+      worker: null,
+      startTime: new Date(),
+    });
+    this.registeredWorkers.set('sound_engine', {
+      pid: 102,
+      name: 'web-audio-daemon (sound)',
       worker: null,
       startTime: new Date(),
     });
@@ -206,6 +219,24 @@ export class WebTelemetryEngine {
         memPercent: 0.2,
         status: 'S',
         startTime: item.startTime.toTimeString().substring(0, 8),
+      });
+    }
+
+    // Merge active processes from Microkernel TaskScheduler
+    const pcbs = globalTaskScheduler.getAllProcesses();
+    for (const pcb of pcbs) {
+      if (list.some((item) => item.pid === pcb.pid)) continue;
+      list.push({
+        pid: pcb.pid,
+        user: pcb.user,
+        command: pcb.name,
+        type: 'worker',
+        vsz: `${pcb.vszKB / 1024}M`,
+        rss: `${pcb.rssKB / 1024}M`,
+        cpuPercent: pcb.cpuUsagePercent,
+        memPercent: 0.1,
+        status: pcb.state === 'RUNNING' ? 'R' : 'S',
+        startTime: pcb.startTime.toTimeString().substring(0, 8),
       });
     }
 

@@ -10,7 +10,7 @@
 
 **Earendel** is an ultra-lightweight, zero-cost-to-host Linux terminal emulator written in pure TypeScript. Designed to solve the traditional headaches of OS labs—such as heavy VMware setups, server maintenance costs, and broken student environments—Earendel delivers a complete Linux TTY experience directly in the browser with **instant boot, 0s latency, and 100% client-side privacy.**
 
-👉 **Live Demo**: [http://linux.techarts.cn](http://linux.techarts.cn)  
+👉 **Live Demo**: [http://earendel.techarts.cn](http://earendel.techarts.cn)  
 *(Default Credentials: Username `hello` | Password `123456`)*
 
 ---
@@ -59,7 +59,7 @@ Open your browser and visit `http://localhost:3000`. Login with username `hello`
 ### For Educators & Bloggers (Embed in 1 Minute)
 Simply embed Earendel into your online course, documentation, or blog via Iframe:
 
-<iframe src="http://linux.techarts.cn" width="100%" height="600px" frameborder="0"></iframe>
+<iframe src="http://earendel.techarts.cn" width="100%" height="600px" frameborder="0"></iframe>
 
 ---
 
@@ -69,10 +69,10 @@ Simply embed Earendel into your online course, documentation, or blog via Iframe
 | :--- | :--- |
 | **File Management** | `ls`, `pwd`, `cd`, `cat`, `touch`, `mkdir`, `rm`, `cp`, `mv`, `head`, `tail`, `wc`, `find`, `which`, `whereis`, `locate`, `mount`, `umount`, `xclip` |
 | **Permissions & Users** | `chmod`, `chown`, `whoami`, `who`, `id`, `useradd`, `userdel`, `su`, `sudo`, `login`, `umask` |
-| **Interpreters** | `python3` (or `python`), `node` (or `js`) |
+| **Interpreters & Compiler** | `python3` (or `python`), `node` (or `js`), `ecc` (EAF Binary Compiler) |
 | **Text Editors** | `vi` (or `vim`), `nano` |
 | **Networking & Security** | `ping`, `curl`, `ufw`, `iptables`, `tcpdump`, `traceroute` |
-| **Container & Process** | `docker`, `ps`, `top`, `htop`, `worker`, `kill`, `systemctl`, `apt`, `df`, `free`, `uptime`, `time`, `crontab` |
+| **Container & Process** | `docker`, `ps`, `top`, `htop`, `worker`, `kill`, `systemctl`, `apt`, `df`, `free`, `uptime`, `time`, `crontab`, `dmesg`, `lsmod`, `modprobe`, `rmmod`, `vmap`, `ipcs`, `kdb` |
 | **Multiplexer & Snapshot**| `tmux`, `snapshot` (`backup`, `restore`), `display`, `fbset`, `fbclear` |
 | **Geek & Customization** | `theme`, `sound`, `man`, `alias`, `unalias`, `cheat`, `tell`, `sl`, `figlet` |
 

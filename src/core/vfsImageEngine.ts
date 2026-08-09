@@ -15,7 +15,7 @@ export interface VFSImagePayload {
 }
 
 class VFSImageEngine {
-  private remoteUrl: string = 'https://hub.linux.techarts.cn';
+  private remoteUrl: string = 'https://hub.earendel.techarts.cn';
 
   // Pure JS SHA-256 implementation fallback for non-secure HTTP browser contexts
   private pureJsSha256(str: string): string {

@@ -17,7 +17,7 @@ export interface PackageMeta {
 
 class PkgManager {
   private repo: Map<string, PackageMeta> = new Map();
-  private repoBaseUrl: string = 'http://repo.linux.techarts.cn';
+  private repoBaseUrl: string = 'http://repo.earendel.techarts.cn';
 
   constructor() {
     this.initDefaultRepo();
@@ -74,9 +74,9 @@ class PkgManager {
       const errLog = [
         `Get:1 ${this.repoBaseUrl}/packages [Connecting...]`,
         `Err:1 ${this.repoBaseUrl}/packages`,
-        `  Could not connect to repo.linux.techarts.cn:80 (${e.message || 'Failed to fetch'}).`,
+        `  Could not connect to repo.earendel.techarts.cn:80 (${e.message || 'Failed to fetch'}).`,
         `Reading package lists... Done`,
-        `W: Failed to fetch ${this.repoBaseUrl}/packages  Could not connect to repo.linux.techarts.cn:80 (${e.message || 'Failed to fetch'})`,
+        `W: Failed to fetch ${this.repoBaseUrl}/packages  Could not connect to repo.earendel.techarts.cn:80 (${e.message || 'Failed to fetch'})`,
         `W: Some index files failed to download. They have been ignored, or old ones used instead.`,
         `\x1b[31mE: Unable to fetch package index from official repository.\x1b[0m`,
       ].join('\n');
@@ -269,7 +269,7 @@ class PkgManager {
             const info = [
               `\x1b[1;36m            .-/+\`      \x1b[1;37m${user}@earendel\x1b[0m`,
               `\x1b[1;36m           \`:${ctx.env['USER'] === 'root' ? '\\x1b[1;31m' : ''}+-        \x1b[0m--------------`,
-              `\x1b[1;36m          :\`  ::-      \x1b[1;33mOS\x1b[0m: Earendel Linux Terminal Alpha`,
+              `\x1b[1;36m          :\`  ::-      \x1b[1;33mOS\x1b[0m: Earendel POSIX WebOS`,
               `\x1b[1;36m      +\` :\`    \`:+\`    \x1b[1;33mHost\x1b[0m: WebAssembly Core v1.0`,
               `\x1b[1;36m    \`+.\`        \`+.\`   \x1b[1;33mKernel\x1b[0m: 5.15.0-web-earendel`,
               `\x1b[1;36m   :\`              \`:  \x1b[1;33mUptime\x1b[0m: 2 hours, 14 mins`,

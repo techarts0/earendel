@@ -97,8 +97,8 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
 
     const showUbuntuWelcome = () => {
       globalSoundEngine.playLoginSound();
-      term.clear();
-      term.writeln('\x1b[1;36mWelcome to Earendel Linux Terminal Alpha\x1b[0m');
+      term.reset();
+      term.writeln('\x1b[1;36mWelcome to Earendel POSIX WebOS\x1b[0m');
       term.writeln('\x1b[90mType \x1b[33mhelp\x1b[90m for commands, \x1b[33mlang zh\x1b[90m for Chinese.\x1b[0m\n');
       term.write(promptStr());
     };
@@ -107,7 +107,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
       isInitialBootLoginRef.current = false;
       showUbuntuWelcome();
     } else {
-      term.writeln('Earendel Linux Terminal Alpha (tty1)');
+      term.writeln('Earendel POSIX WebOS (tty1)');
       term.writeln('\x1b[1;36mhttps://github.com/techarts0/earendel\x1b[0m\r\n');
       term.write('earendel login: ');
     }
@@ -131,7 +131,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
               inputBufferRef.current += clipText;
               term.write(clipText);
             }
-          } catch (e) {}
+          } catch (e) { }
         }
         return;
       }
@@ -209,7 +209,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
             isInitialBootLoginRef.current = false;
             showUbuntuWelcome();
           } else {
-            term.clear();
+            term.reset();
             term.writeln(`\x1b[1;32mLast login: ${new Date().toUTCString()} on tty1\x1b[0m\r\n`);
             term.write(promptStr());
           }
@@ -255,7 +255,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
               globalVFS.changeDirectory('/home/hello');
               isInitialBootLoginRef.current = true;
               term.clear();
-              term.writeln('Earendel Linux Terminal Alpha\r\n');
+              term.writeln('Earendel POSIX WebOS\r\n');
               term.write('earendel login: ');
               return;
             }

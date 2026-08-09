@@ -7,7 +7,7 @@ export const pythonCommands: Command[] = [
     aliases: ['python'],
     description: 'Python 3 language interpreter',
     category: 'sys',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       const targetFile = ctx.args.find((a) => !a.startsWith('-'));
 
       if (!targetFile) {
@@ -24,7 +24,7 @@ export const pythonCommands: Command[] = [
       }
 
       const scriptArgs = ctx.args.slice(ctx.args.indexOf(targetFile) + 1);
-      const res = globalPythonEngine.executeScript(node.content || '', scriptArgs);
+      const res = await globalPythonEngine.executeScript(node.content || '', scriptArgs);
       return res;
     },
   },

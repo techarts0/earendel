@@ -215,10 +215,10 @@ Available Behavioral Commands & Applets:
       const isZh = ctx.lang === 'zh';
       return {
         stdout: isZh
-          ? `Earendel 原生行为级 Linux 终端帮助指南:
+          ? `Earendel POSIX WebOS 终端帮助指南:
 常见命令: ls, cd, pwd, mkdir, touch, cat, echo, chmod, grep, find, sed, awk, ps, top, free, df, tar, bash, nano
 Shell 语法: 支持变量定义 ($VAR)、管道符 (|)、输出重定向 (>/>>)、循环与脚本运行 (./script.sh)\n`
-          : `Earendel Native Behavioral Linux Terminal Guide:
+          : `Earendel POSIX WebOS 终端帮助指南:
 Commands: ls, cd, pwd, mkdir, touch, cat, echo, chmod, grep, find, sed, awk, ps, top, free, df, tar, bash, nano
 Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script execution (./script.sh)\n`,
         stderr: '',

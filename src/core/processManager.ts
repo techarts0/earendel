@@ -1,4 +1,5 @@
 import { ProcessInfo } from './types';
+import { globalTaskScheduler } from '../kernel/taskScheduler';
 
 export interface JobInfo {
   jobId: number;
@@ -76,6 +77,21 @@ export class ProcessManager {
       tty: 'tty1',
       stat: 'S',
       command,
+    });
+
+    // Also register PCB in Microkernel TaskScheduler
+    globalTaskScheduler.createProcess({
+      pid: proc.pid,
+      ppid,
+      name: `[bg] ${command}`,
+      user: 'hello',
+      state: 'RUNNING',
+      startTime: new Date(),
+      vszKB: 12000,
+      rssKB: 2000,
+      cpuUsagePercent: 0.1,
+      cwd: '/home/hello',
+      fds: new Map([[0, '/dev/stdin'], [1, '/dev/stdout'], [2, '/dev/stderr']]),
     });
 
     const jobId = this.nextJobId++;

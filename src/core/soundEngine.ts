@@ -1,4 +1,7 @@
 // Earendel Pure Web Audio Sound Synthesizer Engine
+import { syscall } from '../kernel/syscall';
+import { SyscallNo } from '../kernel/types';
+
 class SoundEngine {
   private ctx: AudioContext | null = null;
   private enabled: boolean = true;
@@ -39,6 +42,7 @@ class SoundEngine {
   // 1. Mechanical Switch Keypress Sound
   public playKeySound() {
     if (!this.enabled) return;
+    syscall(SyscallNo.SYS_WRITE, '/dev/audio', 'sound_keypress').catch(() => {});
     this.initCtx();
     if (!this.ctx) return;
 

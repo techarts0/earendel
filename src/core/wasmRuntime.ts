@@ -1,5 +1,7 @@
-// Earendel WebAssembly (WASM) & POSIX WASI Native Runtime Engine
 import { ExecutionContext, ExecutionResult } from './types';
+import { syscall } from '../kernel/syscall';
+import { SyscallNo } from '../kernel/types';
+import { globalVMPageTable } from '../kernel/vmPageTable';
 
 export class WasmRuntimeEngine {
   /**
@@ -10,6 +12,10 @@ export class WasmRuntimeEngine {
     wasmBytes: Uint8Array | ArrayBuffer,
     ctx: ExecutionContext
   ): Promise<ExecutionResult> {
+    const forkRes = await syscall(SyscallNo.SYS_FORK, 'wasm_process', '/home/hello');
+    const childPid = forkRes.data || 303;
+    globalVMPageTable.allocatePage(Math.floor(childPid / 10));
+
     let stdoutBuffer = '';
     let stderrBuffer = '';
     let wasmMemory: WebAssembly.Memory | null = null;
@@ -152,8 +158,10 @@ export class WasmRuntimeEngine {
         }
       }
 
+      await syscall(SyscallNo.SYS_EXIT, childPid);
       return { stdout: stdoutBuffer, stderr: stderrBuffer, exitCode: 0 };
     } catch (e: any) {
+      await syscall(SyscallNo.SYS_EXIT, childPid);
       if (e.message?.startsWith('proc_exit:')) {
         const code = parseInt(e.message.split(':')[1], 10) || 0;
         return { stdout: stdoutBuffer, stderr: stderrBuffer, exitCode: code };
