@@ -17,7 +17,7 @@ export interface PackageMeta {
 
 class PkgManager {
   private repo: Map<string, PackageMeta> = new Map();
-  private repoBaseUrl: string = 'http://repo.earendel.techarts.cn';
+  private repoBaseUrl: string = 'https://repo.earendel.techarts.cn';
 
   constructor() {
     this.initDefaultRepo();

@@ -59,7 +59,7 @@ Open your browser and visit `http://localhost:3000`. Login with username `hello`
 ### For Educators & Bloggers (Embed in 1 Minute)
 Simply embed Earendel into your online course, documentation, or blog via Iframe:
 
-<iframe src="http://earendel.techarts.cn" width="100%" height="600px" frameborder="0"></iframe>
+<iframe src="https://earendel.techarts.cn" width="100%" height="600px" frameborder="0"></iframe>
 
 ---
 
