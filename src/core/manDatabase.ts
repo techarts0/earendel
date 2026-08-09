@@ -560,4 +560,15 @@ export const manDatabase: Record<string, ManPage> = {
     examplesEn: ['cat file.txt | xclip', 'xclip -o'],
     examplesZh: ['cat file.txt | xclip', 'xclip -o'],
   },
+  worker: {
+    name: 'worker',
+    section: 1,
+    synopsis: 'worker',
+    descriptionEn: 'Inspect active Web OS WebWorker threads, WASM runtimes and background daemons.',
+    descriptionZh: '实时检视与监控 Earendel 运行在浏览器后台的 WebWorker 线程、WASM 运行时与后台守护进程。',
+    optionsEn: [],
+    optionsZh: [],
+    examplesEn: ['worker'],
+    examplesZh: ['worker'],
+  },
 };

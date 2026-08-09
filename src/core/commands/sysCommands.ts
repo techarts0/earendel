@@ -3,6 +3,7 @@ import { Command } from '../types';
 import { globalSoundEngine } from '../soundEngine';
 import { JobInfo } from '../processManager';
 import { globalSnapshotEngine } from '../snapshotEngine';
+import { globalWebTelemetryEngine } from '../webTelemetryEngine';
 
 export const sysCommands: Command[] = [
   {
@@ -11,18 +12,18 @@ export const sysCommands: Command[] = [
     category: 'sys',
     execute: (ctx) => {
       const aux = ctx.args.includes('aux') || ctx.args.includes('-ef');
-      const procs = ctx.processManager.getProcesses();
+      const telemetryProcs = globalWebTelemetryEngine.getProcessList();
 
       if (aux) {
         let out = 'USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\n';
-        for (const p of procs) {
-          out += `${p.user.padEnd(10, ' ')} ${p.pid.toString().padStart(5, ' ')} ${p.cpu.toFixed(1).padStart(4, ' ')} ${p.mem.toFixed(1).padStart(4, ' ')} ${p.vsz.toString().padStart(6, ' ')} ${p.rss.toString().padStart(5, ' ')} ${p.tty.padEnd(8, ' ')} ${p.stat.padEnd(4, ' ')} ${p.startTime.padEnd(7, ' ')} 0:00 ${p.command}\n`;
+        for (const p of telemetryProcs) {
+          out += `${p.user.padEnd(10, ' ')} ${p.pid.toString().padStart(5, ' ')} ${p.cpuPercent.toFixed(1).padStart(4, ' ')} ${p.memPercent.toFixed(1).padStart(4, ' ')} ${p.vsz.padStart(6, ' ')} ${p.rss.padStart(5, ' ')} tty1     ${p.status.padEnd(4, ' ')} ${p.startTime.padEnd(7, ' ')} 0:00 ${p.command}\n`;
         }
         return { stdout: out, stderr: '', exitCode: 0 };
       } else {
         let out = '  PID TTY          TIME CMD\n';
-        for (const p of procs) {
-          out += `${p.pid.toString().padStart(5, ' ')} ${p.tty.padEnd(8, ' ')} 00:00:00 ${p.command}\n`;
+        for (const p of telemetryProcs) {
+          out += `${p.pid.toString().padStart(5, ' ')} tty1     00:00:00 ${p.command}\n`;
         }
         return { stdout: out, stderr: '', exitCode: 0 };
       }
@@ -30,17 +31,21 @@ export const sysCommands: Command[] = [
   },
   {
     name: 'top',
+    aliases: ['htop'],
     description: 'Display Linux processes and system resource usage',
     category: 'sys',
     execute: (ctx) => {
-      const procs = ctx.processManager.getProcesses();
-      let out = `top - 08:30:00 up 1 day,  2:15,  1 user,  load average: 0.05, 0.03, 0.01\n`;
-      out += `Tasks: ${procs.length} total,   1 running,   ${procs.length - 1} sleeping,   0 stopped,   0 zombie\n`;
-      out += `%Cpu(s):  1.2 us,  0.5 sy,  0.0 ni, 98.3 id,  0.0 wa,  0.0 hi,  0.0 si\n`;
-      out += `MiB Mem :   2048.0 total,   1280.0 free,    384.0 used,    384.0 buff/cache\n\n`;
+      const telemetryProcs = globalWebTelemetryEngine.getProcessList();
+      const mem = globalWebTelemetryEngine.getRealMemoryInfo();
+      const nowStr = new Date().toTimeString().substring(0, 8);
+
+      let out = `top - ${nowStr} up 1 day,  2:15,  1 user,  load average: 0.08, 0.05, 0.01\n`;
+      out += `Tasks: ${telemetryProcs.length} total,   1 running,   ${telemetryProcs.length - 1} sleeping,   0 stopped,   0 zombie\n`;
+      out += `%Cpu(s):  1.5 us,  0.8 sy,  0.0 ni, 97.7 id,  0.0 wa,  0.0 hi,  0.0 si\n`;
+      out += `MiB Mem :   ${mem.totalMB.toFixed(1).padStart(6, ' ')} total,   ${mem.freeMB.toFixed(1).padStart(6, ' ')} free,   ${mem.usedMB.toFixed(1).padStart(6, ' ')} used,   ${mem.buffCacheMB.toFixed(1).padStart(6, ' ')} buff/cache\n\n`;
       out += `  PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\n`;
-      for (const p of procs) {
-        out += `${p.pid.toString().padStart(5, ' ')} ${p.user.padEnd(8, ' ')} 20   0   ${p.vsz}   ${p.rss}   2800 ${p.stat[0]}   0.0   0.2   0:00.08 ${p.command}\n`;
+      for (const p of telemetryProcs) {
+        out += `${p.pid.toString().padStart(5, ' ')} ${p.user.padEnd(8, ' ')} 20   0   ${p.vsz.padStart(6, ' ')} ${p.rss.padStart(5, ' ')}   2800 ${p.status[0]}   ${p.cpuPercent.toFixed(1).padStart(4, ' ')}   ${p.memPercent.toFixed(1).padStart(4, ' ')}   0:00.08 ${p.command}\n`;
       }
       return { stdout: out, stderr: '', exitCode: 0 };
     },
@@ -50,12 +55,28 @@ export const sysCommands: Command[] = [
     description: 'Display amount of free and used memory in the system',
     category: 'sys',
     execute: (ctx) => {
-      const isHuman = ctx.args.includes('-h') || ctx.args.includes('-m');
-      const unit = isHuman ? 'Mi' : 'Ki';
+      const mem = globalWebTelemetryEngine.getRealMemoryInfo();
+      const isHuman = ctx.args.includes('-h');
+      const isGiga = ctx.args.includes('-g');
+
+      if (isHuman) {
+        const totalG = (mem.totalMB / 1024).toFixed(1) + 'Gi';
+        const usedM = mem.usedMB + 'Mi';
+        const freeG = (mem.freeMB / 1024).toFixed(1) + 'Gi';
+        const availG = (mem.availableMB / 1024).toFixed(1) + 'Gi';
+        return {
+          stdout: `               total        used        free      shared  buff/cache   available
+Mem:          ${totalG.padStart(10, ' ')}  ${usedM.padStart(10, ' ')}  ${freeG.padStart(10, ' ')}        0B  ${(mem.buffCacheMB + 'Mi').padStart(10, ' ')}  ${availG.padStart(10, ' ')}
+Swap:         2.0Gi          0B       2.0Gi\n`,
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+
       return {
         stdout: `               total        used        free      shared  buff/cache   available
-Mem:          2048${unit}     384${unit}    1280${unit}       16${unit}     384${unit}    1536${unit}
-Swap:         1024${unit}       0${unit}    1024${unit}\n`,
+Mem:          ${(mem.totalMB * 1024).toString().padStart(10, ' ')}  ${(mem.usedMB * 1024).toString().padStart(10, ' ')}  ${(mem.freeMB * 1024).toString().padStart(10, ' ')}           0  ${(mem.buffCacheMB * 1024).toString().padStart(10, ' ')}  ${(mem.availableMB * 1024).toString().padStart(10, ' ')}
+Swap:        2097152           0     2097152\n`,
         stderr: '',
         exitCode: 0,
       };
@@ -65,15 +86,46 @@ Swap:         1024${unit}       0${unit}    1024${unit}\n`,
     name: 'df',
     description: 'Report file system disk space usage',
     category: 'sys',
-    execute: (ctx) => {
-      return {
-        stdout: `Filesystem     1K-blocks      Used Available Use% Mounted on
-/dev/root        8388608   1048576   7340032  13% /
-tmpfs             1048576       512   1048064   1% /tmp
-/dev/sda1        41943040   5242880  36690160  13% /home/hello\n`,
-        stderr: '',
-        exitCode: 0,
-      };
+    execute: async (ctx) => {
+      const storage = await globalWebTelemetryEngine.getRealStorageEstimate();
+      const isHuman = ctx.args.includes('-h');
+
+      if (isHuman) {
+        const totalGB = (storage.totalBytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
+        const usedMB = (storage.usedBytes / (1024 * 1024)).toFixed(1) + 'M';
+        const availGB = (storage.availableBytes / (1024 * 1024 * 1024)).toFixed(1) + 'G';
+        const pct = storage.usePercent + '%';
+
+        let out = `Filesystem      Size  Used Avail Use% Mounted on\n`;
+        out += `/dev/root       ${totalGB.padStart(5, ' ')} ${usedMB.padStart(5, ' ')} ${availGB.padStart(5, ' ')} ${pct.padStart(4, ' ')} /\n`;
+        out += `tmpfs           800M  1.2M  798M   1% /tmp\n`;
+        out += `hostfs          500G  120G  380G  24% /mnt/host\n`;
+        return { stdout: out, stderr: '', exitCode: 0 };
+      }
+
+      const total1K = Math.round(storage.totalBytes / 1024);
+      const used1K = Math.round(storage.usedBytes / 1024);
+      const avail1K = Math.round(storage.availableBytes / 1024);
+
+      let out = `Filesystem     1K-blocks      Used Available Use% Mounted on\n`;
+      out += `/dev/root      ${total1K.toString().padStart(9, ' ')} ${used1K.toString().padStart(9, ' ')} ${avail1K.toString().padStart(9, ' ')}  ${storage.usePercent}% /\n`;
+      out += `tmpfs             819200      1228    817972   1% /tmp\n`;
+      return { stdout: out, stderr: '', exitCode: 0 };
+    },
+  },
+  {
+    name: 'worker',
+    description: 'Inspect active WebWorker threads and background tasks',
+    category: 'sys',
+    execute: () => {
+      const workers = globalWebTelemetryEngine.getProcessList().filter((p) => p.type === 'worker');
+      let out = `Active Web OS Workers & Background Daemons: ${workers.length}\n\n`;
+      out += `  PID TYPE     MEM%  CPU%  START    WORKER NAME / DAEMON\n`;
+      out += `----------------------------------------------------------\n`;
+      for (const w of workers) {
+        out += `${w.pid.toString().padStart(5, ' ')} ${w.type.padEnd(8, ' ')} ${w.memPercent.toFixed(1).padStart(4, ' ')}% ${w.cpuPercent.toFixed(1).padStart(4, ' ')}% ${w.startTime} ${w.command}\n`;
+      }
+      return { stdout: out, stderr: '', exitCode: 0 };
     },
   },
   {
