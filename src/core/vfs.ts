@@ -333,7 +333,7 @@ export class VirtualFileSystem {
             group: 'hello',
             size: 4096,
             updatedAt: new Date(),
-            children: isFile ? undefined : (next?.children || new Map()),
+            children: isFile ? undefined : new Map(),
             parent: curr,
           };
           curr.children.set(part, next);

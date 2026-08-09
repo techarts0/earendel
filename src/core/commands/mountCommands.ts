@@ -74,7 +74,7 @@ export const mountCommands: Command[] = [
     description: 'command line interface to the X selection / host clipboard',
     category: 'sys',
     execute: async (ctx) => {
-      const isOut = ctx.args.includes('-o') || ctx.name === 'pbpaste';
+      const isOut = ctx.args.includes('-o') || (ctx as any).name === 'pbpaste';
       const input = ctx.pipeInput;
 
       // Reading host clipboard (xclip -o / pbpaste)

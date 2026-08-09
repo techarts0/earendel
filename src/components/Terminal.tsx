@@ -10,7 +10,6 @@ import { Language } from '../i18n/translations';
 import { highlightCommandLine } from '../core/syntaxHighlighter';
 import { globalSoundEngine } from '../core/soundEngine';
 import { globalThemeManager, THEME_PRESETS } from '../core/themeManager';
-import { globalP2PMeshEngine } from '../core/p2pMeshEngine';
 
 interface TerminalProps {
   onOpenNano?: (nanoData: { path: string; content: string }) => void;
@@ -48,14 +47,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
     const symbol = isRoot ? '#' : '$';
     const userColor = isRoot ? '\x1b[1;31m' : '\x1b[1;32m';
 
-    const joinedPeerId = globalP2PMeshEngine.getActiveJoinedPeerId();
-    const hostname = joinedPeerId
-      ? joinedPeerId.startsWith('peer-earendel-')
-        ? joinedPeerId.replace('peer-earendel-', 'peer-')
-        : joinedPeerId
-      : 'earendel';
-
-    return `${userColor}${user}@${hostname}\x1b[0m:\x1b[1;34m${shortPwd}\x1b[0m${symbol} `;
+    return `${userColor}${user}@earendel\x1b[0m:\x1b[1;34m${shortPwd}\x1b[0m${symbol} `;
   };
 
   useEffect(() => {

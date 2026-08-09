@@ -57,14 +57,7 @@ export const shellControlCommands: Command[] = [
     name: 'exit',
     description: 'Cause the shell to exit with a status of N',
     category: 'sys',
-    execute: async (ctx) => {
-      const { globalP2PMeshEngine } = await import('../p2pMeshEngine');
-      const joinedId = globalP2PMeshEngine.getActiveJoinedPeerId();
-      if (joinedId) {
-        globalP2PMeshEngine.disconnectMeshJoin();
-        return { stdout: `Connection to \x1b[1;36m${joinedId}\x1b[0m closed.\n`, stderr: '', exitCode: 0 };
-      }
-
+    execute: (ctx) => {
       const code = parseInt(ctx.args[0] || '0', 10);
       return { stdout: 'logout\n', stderr: '', exitCode: isNaN(code) ? 0 : code };
     },

@@ -22,8 +22,6 @@ import { archiveSuiteCommands } from './archiveSuiteCommands';
 import { aliasCommands } from './aliasCommands';
 import { findSuiteCommands } from './findSuiteCommands';
 import { vfsCommands } from './vfsCommands';
-import { sshCommands } from './sshCommands';
-import { meshCommands } from './meshCommands';
 import { mountCommands } from './mountCommands';
 import { cronCommands } from './cronCommands';
 import { graphicsCommands } from './graphicsCommands';
@@ -52,8 +50,6 @@ export function registerAllCommands(): void {
     ...aliasCommands,
     ...findSuiteCommands,
     ...vfsCommands,
-    ...sshCommands,
-    ...meshCommands,
     ...mountCommands,
     ...cronCommands,
     ...graphicsCommands,
