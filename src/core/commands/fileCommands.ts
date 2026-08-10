@@ -17,14 +17,22 @@ export const fileCommands: Command[] = [
     name: 'ls',
     description: 'List directory contents with permissions and details',
     category: 'file',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       const showAll = ctx.args.includes('-a') || ctx.args.includes('-la') || ctx.args.includes('-al');
       const showLong = ctx.args.includes('-l') || ctx.args.includes('-la') || ctx.args.includes('-al');
       const pathArg = ctx.args.find((a) => !a.startsWith('-')) || '.';
 
+      const openRes = await syscall(SyscallNo.SYS_OPEN, pathArg, 0);
+      await syscall(SyscallNo.SYS_STAT, pathArg);
+
       const targetNode = ctx.vfs.getNodeByPath(pathArg);
       if (!targetNode) {
+        if (openRes.data !== undefined) await syscall(SyscallNo.SYS_CLOSE, openRes.data);
         return { stdout: '', stderr: `ls: cannot access '${pathArg}': No such file or directory\n`, exitCode: 2 };
+      }
+
+      if (openRes.data !== undefined) {
+        await syscall(SyscallNo.SYS_CLOSE, openRes.data);
       }
 
       if (targetNode.type === 'file') {
@@ -83,12 +91,13 @@ export const fileCommands: Command[] = [
     name: 'mkdir',
     description: 'Create directory',
     category: 'file',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       if (ctx.args.length === 0) {
         return { stdout: '', stderr: 'mkdir: missing operand\n', exitCode: 1 };
       }
       const pFlag = ctx.args.includes('-p');
       const dirName = ctx.args.find((a) => !a.startsWith('-')) || '';
+      await syscall(SyscallNo.SYS_STAT, dirName);
       const ok = ctx.vfs.mkdir(dirName, pFlag);
       if (!ok) {
         return { stdout: '', stderr: `mkdir: cannot create directory '${dirName}': File exists or invalid path\n`, exitCode: 1 };

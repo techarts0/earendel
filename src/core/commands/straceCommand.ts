@@ -20,11 +20,21 @@ export const straceCommand: Command = {
 
     let res = { stdout: '', stderr: '', exitCode: 0 };
     try {
+      const { syscall } = await import('../../kernel/syscall');
+      const { SyscallNo } = await import('../../kernel/types');
+
+      const progPath = ctx.args[0].startsWith('/') ? ctx.args[0] : `/usr/bin/${ctx.args[0]}`;
+      await syscall(SyscallNo.SYS_EXECVE, progPath, ctx.args.slice(1));
+
       const { globalCommandRegistry } = await import('../commandRegistry');
       res = await globalCommandRegistry.execute(ctx.args[0], {
         ...ctx,
         args: ctx.args.slice(1),
       });
+
+      if (res.stdout) {
+        await syscall(SyscallNo.SYS_WRITE, 1, res.stdout);
+      }
     } finally {
       setSyscallTracer(null);
     }
