@@ -123,4 +123,20 @@ export const netCommands: Command[] = [
       return { stdout: output + '\n', stderr: '', exitCode: 0 };
     },
   },
+  {
+    name: 'ss',
+    description: 'another utility to investigate sockets',
+    category: 'net',
+    execute: () => {
+      const ports = globalServiceManager.getListeningPorts();
+      const lines = [
+        'Netid State   Recv-Q Send-Q Local Address:Port   Peer Address:Port Process',
+      ];
+      ports.forEach((p: { port: number; name: string }) => {
+        const addr = p.port === 80 || p.port === 3306 ? `127.0.0.1:${p.port}` : `0.0.0.0:${p.port}`;
+        lines.push(`tcp   LISTEN  0      128    ${addr.padEnd(21)} 0.0.0.0:*       users:(("${p.name}",pid=4,fd=3))`);
+      });
+      return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+    },
+  },
 ];

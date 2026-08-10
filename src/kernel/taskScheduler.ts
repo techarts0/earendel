@@ -50,6 +50,10 @@ export class TaskScheduler {
     return Array.from(this.pcbTable.values());
   }
 
+  public getProcesses(): ProcessControlBlock[] {
+    return this.getAllProcesses();
+  }
+
   public updateState(pid: number, state: TaskState): boolean {
     const pcb = this.pcbTable.get(pid);
     if (!pcb) return false;

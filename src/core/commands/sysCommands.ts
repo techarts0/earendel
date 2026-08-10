@@ -6,6 +6,7 @@ import { globalSnapshotEngine } from '../snapshotEngine';
 import { globalWebTelemetryEngine } from '../webTelemetryEngine';
 import { syscall } from '../../kernel/syscall';
 import { SyscallNo } from '../../kernel/types';
+import { globalTaskScheduler } from '../../kernel/taskScheduler';
 
 export const sysCommands: Command[] = [
   {
@@ -14,18 +15,22 @@ export const sysCommands: Command[] = [
     category: 'sys',
     execute: (ctx) => {
       const aux = ctx.args.includes('aux') || ctx.args.includes('-ef');
-      const telemetryProcs = globalWebTelemetryEngine.getProcessList();
+      const realProcs = globalTaskScheduler.getAllProcesses();
 
       if (aux) {
         let out = 'USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\n';
-        for (const p of telemetryProcs) {
-          out += `${p.user.padEnd(10, ' ')} ${p.pid.toString().padStart(5, ' ')} ${p.cpuPercent.toFixed(1).padStart(4, ' ')} ${p.memPercent.toFixed(1).padStart(4, ' ')} ${p.vsz.padStart(6, ' ')} ${p.rss.padStart(5, ' ')} tty1     ${p.status.padEnd(4, ' ')} ${p.startTime.padEnd(7, ' ')} 0:00 ${p.command}\n`;
+        for (const p of realProcs) {
+          const cpu = p.cpuUsagePercent ? p.cpuUsagePercent.toFixed(1) : '0.0';
+          const mem = (p.rssKB / 1024 / 1024 * 100).toFixed(1);
+          const statChar = p.state === 'RUNNING' ? 'R' : p.state === 'BLOCKED' ? 'T' : p.state === 'ZOMBIE' ? 'Z' : 'S';
+          const timeStr = p.startTime ? p.startTime.toTimeString().substring(0, 5) : '00:00';
+          out += `${p.user.padEnd(10, ' ')} ${p.pid.toString().padStart(5, ' ')} ${cpu.padStart(4, ' ')} ${mem.padStart(4, ' ')} ${(p.vszKB || 16000).toString().padStart(6, ' ')} ${(p.rssKB || 4000).toString().padStart(5, ' ')} tty1     ${statChar.padEnd(4, ' ')} ${timeStr.padEnd(7, ' ')} 0:00 ${p.name}\n`;
         }
         return { stdout: out, stderr: '', exitCode: 0 };
       } else {
         let out = '  PID TTY          TIME CMD\n';
-        for (const p of telemetryProcs) {
-          out += `${p.pid.toString().padStart(5, ' ')} tty1     00:00:00 ${p.command}\n`;
+        for (const p of realProcs) {
+          out += `${p.pid.toString().padStart(5, ' ')} tty1     00:00:00 ${p.name}\n`;
         }
         return { stdout: out, stderr: '', exitCode: 0 };
       }
@@ -37,17 +42,25 @@ export const sysCommands: Command[] = [
     description: 'Display Linux processes and system resource usage',
     category: 'sys',
     execute: (ctx) => {
-      const telemetryProcs = globalWebTelemetryEngine.getProcessList();
+      const realProcs = globalTaskScheduler.getAllProcesses();
       const mem = globalWebTelemetryEngine.getRealMemoryInfo();
       const nowStr = new Date().toTimeString().substring(0, 8);
 
+      const runningCount = realProcs.filter((p) => p.state === 'RUNNING').length;
+      const blockedCount = realProcs.filter((p) => p.state === 'BLOCKED').length;
+      const zombieCount = realProcs.filter((p) => p.state === 'ZOMBIE').length;
+      const sleepingCount = realProcs.length - runningCount - blockedCount - zombieCount;
+
       let out = `top - ${nowStr} up 1 day,  2:15,  1 user,  load average: 0.08, 0.05, 0.01\n`;
-      out += `Tasks: ${telemetryProcs.length} total,   1 running,   ${telemetryProcs.length - 1} sleeping,   0 stopped,   0 zombie\n`;
+      out += `Tasks: ${realProcs.length} total,   ${runningCount} running,   ${sleepingCount} sleeping,   ${blockedCount} stopped,   ${zombieCount} zombie\n`;
       out += `%Cpu(s):  1.5 us,  0.8 sy,  0.0 ni, 97.7 id,  0.0 wa,  0.0 hi,  0.0 si\n`;
       out += `MiB Mem :   ${mem.totalMB.toFixed(1).padStart(6, ' ')} total,   ${mem.freeMB.toFixed(1).padStart(6, ' ')} free,   ${mem.usedMB.toFixed(1).padStart(6, ' ')} used,   ${mem.buffCacheMB.toFixed(1).padStart(6, ' ')} buff/cache\n\n`;
       out += `  PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\n`;
-      for (const p of telemetryProcs) {
-        out += `${p.pid.toString().padStart(5, ' ')} ${p.user.padEnd(8, ' ')} 20   0   ${p.vsz.padStart(6, ' ')} ${p.rss.padStart(5, ' ')}   2800 ${p.status[0]}   ${p.cpuPercent.toFixed(1).padStart(4, ' ')}   ${p.memPercent.toFixed(1).padStart(4, ' ')}   0:00.08 ${p.command}\n`;
+      for (const p of realProcs) {
+        const cpu = p.cpuUsagePercent ? p.cpuUsagePercent.toFixed(1) : '0.0';
+        const memP = (p.rssKB / 1024 / 1024 * 100).toFixed(1);
+        const statChar = p.state === 'RUNNING' ? 'R' : p.state === 'BLOCKED' ? 'T' : p.state === 'ZOMBIE' ? 'Z' : 'S';
+        out += `${p.pid.toString().padStart(5, ' ')} ${p.user.padEnd(8, ' ')} 20   0   ${(p.vszKB || 16000).toString().padStart(6, ' ')} ${(p.rssKB || 4000).toString().padStart(5, ' ')}   2800 ${statChar}   ${cpu.padStart(4, ' ')}   ${memP.padStart(4, ' ')}   0:00.08 ${p.name}\n`;
       }
       return { stdout: out, stderr: '', exitCode: 0 };
     },
@@ -263,15 +276,16 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
     name: 'pkill',
     description: 'Signal processes based on name',
     category: 'sys',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       const procName = ctx.args.find((a) => !a.startsWith('-'));
       if (!procName) return { stdout: '', stderr: 'pkill: missing process name\n', exitCode: 1 };
 
-      const procs = ctx.processManager.getProcesses();
+      const procs = globalTaskScheduler.getAllProcesses();
       let killed = 0;
       for (const p of procs) {
-        if (p.command.includes(procName)) {
-          if (ctx.processManager.removeProcess(p.pid)) {
+        if (p.name.includes(procName)) {
+          const res = await syscall(SyscallNo.SYS_KILL, p.pid, 15);
+          if (res.code === 0) {
             killed++;
           }
         }
