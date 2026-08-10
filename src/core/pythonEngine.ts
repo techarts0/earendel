@@ -110,11 +110,15 @@ export class PythonEngine {
 
     // Expression with variables safely evaluated
     try {
-      const sanitized = trimmed.replace(/[a-zA-Z_][a-zA-Z0-9_]*/g, (m) => {
+      const sanitized = trimmed.replace(/[a-zA-Z_][a-zA-Z0-9_.]*/g, (m) => {
         if (vars[m] !== undefined) {
-          return JSON.stringify(vars[m]);
+          return typeof vars[m] === 'object' ? JSON.stringify(vars[m]) : String(vars[m]);
         }
-        return m;
+        if (m === 'True') return 'true';
+        if (m === 'False') return 'false';
+        if (m === 'None') return 'null';
+        if (['Math', 'Number', 'String', 'Array', 'JSON'].includes(m)) return m;
+        return 'undefined';
       });
       return Function(`"use strict"; return (${sanitized})`)();
     } catch (e) {

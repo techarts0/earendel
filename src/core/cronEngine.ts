@@ -99,6 +99,7 @@ export class CronEngine {
    * Main cron tick loop evaluated every second
    */
   private async tick() {
+    if (this.jobs.length === 0) return;
     const now = new Date();
     const currentMin = now.getMinutes();
     const currentHour = now.getHours();

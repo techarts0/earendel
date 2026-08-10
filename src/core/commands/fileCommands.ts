@@ -67,7 +67,12 @@ export const fileCommands: Command[] = [
     category: 'file',
     execute: (ctx) => {
       const targetPath = ctx.args[0] || '~';
-      const ok = ctx.vfs.changeDirectory(targetPath);
+      const user = ctx.env['USER'] || 'hello';
+      const targetNode = ctx.vfs.getNodeByPath(targetPath);
+      if (targetNode && !ctx.vfs.checkPermission(targetNode, 'x', user)) {
+        return { stdout: '', stderr: `bash: cd: ${targetPath}: Permission denied\n`, exitCode: 1 };
+      }
+      const ok = ctx.vfs.changeDirectory(targetPath, user);
       if (!ok) {
         return { stdout: '', stderr: `bash: cd: ${targetPath}: No such file or directory\n`, exitCode: 1 };
       }
@@ -98,9 +103,16 @@ export const fileCommands: Command[] = [
     category: 'file',
     execute: async (ctx) => {
       if (ctx.args.length === 0) return { stdout: '', stderr: 'touch: missing operand\n', exitCode: 1 };
+      const user = ctx.env['USER'] || 'hello';
       for (const filename of ctx.args) {
         if (!filename.startsWith('-')) {
-          await syscall(SyscallNo.SYS_WRITE, filename, '');
+          const existing = ctx.vfs.readFile(filename, user);
+          if (existing === null) {
+            await syscall(SyscallNo.SYS_WRITE, filename, '');
+          } else {
+            const node = ctx.vfs.getNodeByPath(filename);
+            if (node) node.updatedAt = new Date();
+          }
         }
       }
       return { stdout: '', stderr: '', exitCode: 0 };
@@ -118,7 +130,12 @@ export const fileCommands: Command[] = [
         return { stdout: '', stderr: 'cat: missing operand\n', exitCode: 1 };
       }
       let out = '';
+      const user = ctx.env['USER'] || 'hello';
       for (const arg of ctx.args) {
+        const node = ctx.vfs.getNodeByPath(arg);
+        if (node && !ctx.vfs.checkPermission(node, 'r', user)) {
+          return { stdout: '', stderr: `cat: ${arg}: Permission denied\n`, exitCode: 1 };
+        }
         const readRes = await syscall(SyscallNo.SYS_READ, arg);
         if (readRes.code !== 0 || readRes.data === null || readRes.data === undefined) {
           return { stdout: '', stderr: `cat: ${arg}: No such file or directory\n`, exitCode: 1 };
@@ -127,18 +144,38 @@ export const fileCommands: Command[] = [
       }
       return { stdout: out.endsWith('\n') ? out : out + '\n', stderr: '', exitCode: 0 };
     },
+    executeStream: async function* (ctx, inputStream) {
+      if (inputStream) {
+        for await (const chunk of inputStream) {
+          yield chunk;
+        }
+      }
+      for (const arg of ctx.args) {
+        if (!arg.startsWith('-')) {
+          const content = ctx.vfs.readFile(arg, ctx.env['USER'] || 'hello');
+          if (content !== null) {
+            const lines = content.split('\n');
+            for (let i = 0; i < lines.length; i++) {
+              yield lines[i] + (i < lines.length - 1 ? '\n' : '');
+            }
+          }
+        }
+      }
+    },
   },
   {
     name: 'chmod',
     description: 'Change file mode bits (permissions)',
     category: 'file',
     execute: (ctx) => {
-      if (ctx.args.length < 2) {
-        return { stdout: '', stderr: 'chmod: missing operand\nUsage: chmod [MODE] [FILE]\n', exitCode: 1 };
+      const recursive = ctx.args.includes('-R') || ctx.args.includes('-r');
+      const mode = ctx.args.find((a) => !a.startsWith('-'));
+      const target = ctx.args.slice(ctx.args.indexOf(mode!) + 1).find((a) => !a.startsWith('-'));
+
+      if (!mode || !target) {
+        return { stdout: '', stderr: 'chmod: missing operand\nUsage: chmod [-R] MODE FILE\n', exitCode: 1 };
       }
-      const mode = ctx.args[0];
-      const target = ctx.args[1];
-      const ok = ctx.vfs.chmod(target, mode);
+      const ok = ctx.vfs.chmod(target, mode, recursive);
       if (!ok) {
         return { stdout: '', stderr: `chmod: cannot change permissions of '${target}': No such file or directory\n`, exitCode: 1 };
       }
@@ -177,6 +214,30 @@ export const fileCommands: Command[] = [
       const text = ctx.pipeInput || (ctx.args[0] ? (ctx.vfs.readFile(ctx.args[0]) ?? '') : '');
       const lines = text.split('\n').slice(0, 10);
       return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+    },
+    executeStream: async function* (ctx, inputStream) {
+      let n = 10;
+      const nIdx = ctx.args.indexOf('-n');
+      if (nIdx !== -1 && ctx.args[nIdx + 1]) {
+        n = parseInt(ctx.args[nIdx + 1], 10) || 10;
+      }
+      let count = 0;
+      if (inputStream) {
+        for await (const chunk of inputStream) {
+          for (const line of chunk.split('\n')) {
+            if (count < n) {
+              yield line + '\n';
+              count++;
+              if (count >= n) return;
+            }
+          }
+        }
+      } else if (ctx.args[0]) {
+        const text = ctx.vfs.readFile(ctx.args[0], ctx.env['USER'] || 'hello') ?? '';
+        for (const line of text.split('\n').slice(0, n)) {
+          yield line + '\n';
+        }
+      }
     },
   },
   {
@@ -231,31 +292,82 @@ export const fileCommands: Command[] = [
     description: 'Copy files and directories',
     category: 'file',
     execute: (ctx) => {
-      if (ctx.args.length < 2) return { stdout: '', stderr: 'cp: missing file operand\n', exitCode: 1 };
-      const src = ctx.args[0];
-      const dest = ctx.args[1];
-      const content = ctx.vfs.readFile(src);
-      if (content === null) {
+      const recursive = ctx.args.includes('-r') || ctx.args.includes('-R');
+      const nonFlagArgs = ctx.args.filter((a) => !a.startsWith('-'));
+      if (nonFlagArgs.length < 2) return { stdout: '', stderr: 'cp: missing file operand\nUsage: cp [-r] SOURCE DEST\n', exitCode: 1 };
+      const src = nonFlagArgs[0];
+      const dest = nonFlagArgs[1];
+
+      const copyNode = (srcPath: string, destPath: string): boolean => {
+        const srcNode = ctx.vfs.getNodeByPath(srcPath);
+        if (!srcNode) return false;
+
+        if (srcNode.type === 'directory') {
+          if (!recursive) return false;
+          ctx.vfs.mkdir(destPath, true);
+          if (srcNode.children) {
+            for (const child of srcNode.children.values()) {
+              copyNode(`${srcPath}/${child.name}`, `${destPath}/${child.name}`);
+            }
+          }
+          return true;
+        } else {
+          ctx.vfs.writeFile(destPath, srcNode.content ?? '');
+          return true;
+        }
+      };
+
+      const srcNode = ctx.vfs.getNodeByPath(src);
+      if (!srcNode) {
         return { stdout: '', stderr: `cp: cannot stat '${src}': No such file or directory\n`, exitCode: 1 };
       }
-      ctx.vfs.writeFile(dest, content);
+
+      if (srcNode.type === 'directory' && !recursive) {
+        return { stdout: '', stderr: `cp: -r not specified; omitting directory '${src}'\n`, exitCode: 1 };
+      }
+
+      const ok = copyNode(src, dest);
+      if (!ok) {
+        return { stdout: '', stderr: `cp: failed to copy '${src}' to '${dest}'\n`, exitCode: 1 };
+      }
       return { stdout: '', stderr: '', exitCode: 0 };
     },
   },
   {
     name: 'mv',
-    description: 'Move (rename) files',
+    description: 'Move (rename) files and directories',
     category: 'file',
     execute: (ctx) => {
-      if (ctx.args.length < 2) return { stdout: '', stderr: 'mv: missing file operand\n', exitCode: 1 };
-      const src = ctx.args[0];
-      const dest = ctx.args[1];
-      const content = ctx.vfs.readFile(src);
-      if (content === null) {
+      const nonFlagArgs = ctx.args.filter((a) => !a.startsWith('-'));
+      if (nonFlagArgs.length < 2) return { stdout: '', stderr: 'mv: missing file operand\nUsage: mv SOURCE DEST\n', exitCode: 1 };
+      const src = nonFlagArgs[0];
+      const dest = nonFlagArgs[1];
+
+      const srcNode = ctx.vfs.getNodeByPath(src);
+      if (!srcNode) {
         return { stdout: '', stderr: `mv: cannot stat '${src}': No such file or directory\n`, exitCode: 1 };
       }
-      ctx.vfs.writeFile(dest, content);
-      ctx.vfs.remove(src);
+
+      const copyNode = (srcPath: string, destPath: string): boolean => {
+        const node = ctx.vfs.getNodeByPath(srcPath);
+        if (!node) return false;
+
+        if (node.type === 'directory') {
+          ctx.vfs.mkdir(destPath, true);
+          if (node.children) {
+            for (const child of node.children.values()) {
+              copyNode(`${srcPath}/${child.name}`, `${destPath}/${child.name}`);
+            }
+          }
+          return true;
+        } else {
+          ctx.vfs.writeFile(destPath, node.content ?? '');
+          return true;
+        }
+      };
+
+      copyNode(src, dest);
+      ctx.vfs.remove(src, true);
       return { stdout: '', stderr: '', exitCode: 0 };
     },
   },

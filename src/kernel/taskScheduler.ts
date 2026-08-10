@@ -21,12 +21,23 @@ export class TaskScheduler {
       rssKB: 12000,
       cpuUsagePercent: 0.1,
       cwd: '/',
-      fds: new Map([[0, '/dev/stdin'], [1, '/dev/stdout'], [2, '/dev/stderr']]),
+      fds: new Map([
+        [0, { fd: 0, path: '/dev/stdin', offset: 0, flags: 'r' }],
+        [1, { fd: 1, path: '/dev/stdout', offset: 0, flags: 'w' }],
+        [2, { fd: 2, path: '/dev/stderr', offset: 0, flags: 'w' }],
+      ]),
       isKernelDaemon: true,
     });
   }
 
   public createProcess(pcb: ProcessControlBlock): ProcessControlBlock {
+    if (!pcb.fds || pcb.fds.size === 0) {
+      pcb.fds = new Map([
+        [0, { fd: 0, path: '/dev/stdin', offset: 0, flags: 'r' }],
+        [1, { fd: 1, path: '/dev/stdout', offset: 0, flags: 'w' }],
+        [2, { fd: 2, path: '/dev/stderr', offset: 0, flags: 'w' }],
+      ]);
+    }
     this.pcbTable.set(pcb.pid, pcb);
     return pcb;
   }

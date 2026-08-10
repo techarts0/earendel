@@ -4,6 +4,8 @@ import { globalSoundEngine } from '../soundEngine';
 import { JobInfo } from '../processManager';
 import { globalSnapshotEngine } from '../snapshotEngine';
 import { globalWebTelemetryEngine } from '../webTelemetryEngine';
+import { syscall } from '../../kernel/syscall';
+import { SyscallNo } from '../../kernel/types';
 
 export const sysCommands: Command[] = [
   {
@@ -181,9 +183,11 @@ Swap:        2097152           0     2097152\n`,
     category: 'sys',
     execute: (ctx) => {
       for (const arg of ctx.args) {
-        if (arg.includes('=')) {
-          const [k, v] = arg.split('=');
-          ctx.env[k] = v.replace(/^["']|["']$/g, '');
+        const eqIdx = arg.indexOf('=');
+        if (eqIdx !== -1) {
+          const k = arg.slice(0, eqIdx);
+          const v = arg.slice(eqIdx + 1).replace(/^["']|["']$/g, '');
+          ctx.env[k] = v;
         }
       }
       return { stdout: '', stderr: '', exitCode: 0 };
@@ -218,7 +222,7 @@ Available Behavioral Commands & Applets:
           ? `Earendel POSIX WebOS 终端帮助指南:
 常见命令: ls, cd, pwd, mkdir, touch, cat, echo, chmod, grep, find, sed, awk, ps, top, free, df, tar, bash, nano
 Shell 语法: 支持变量定义 ($VAR)、管道符 (|)、输出重定向 (>/>>)、循环与脚本运行 (./script.sh)\n`
-          : `Earendel POSIX WebOS 终端帮助指南:
+          : `Earendel POSIX WebOS Terminal Help Guide:
 Commands: ls, cd, pwd, mkdir, touch, cat, echo, chmod, grep, find, sed, awk, ps, top, free, df, tar, bash, nano
 Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script execution (./script.sh)\n`,
         stderr: '',
@@ -228,17 +232,29 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
   },
   {
     name: 'kill',
-    description: 'Send a signal to a process (terminate PID)',
+    description: 'Send a signal to a process (terminate/suspend PID)',
     category: 'sys',
-    execute: (ctx) => {
+    execute: async (ctx) => {
+      const sigArg = ctx.args.find((a) => a.startsWith('-'));
       const targetPidStr = ctx.args.find((a) => !a.startsWith('-'));
-      if (!targetPidStr) return { stdout: '', stderr: 'kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]\n', exitCode: 1 };
+      if (!targetPidStr) return { stdout: '', stderr: 'kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ...\n', exitCode: 1 };
 
       const pid = parseInt(targetPidStr, 10);
       if (isNaN(pid)) return { stdout: '', stderr: `kill: ${targetPidStr}: arguments must be process or job IDs\n`, exitCode: 1 };
 
-      const ok = ctx.processManager.removeProcess(pid);
-      if (!ok) return { stdout: '', stderr: `bash: kill: (${pid}) - No such process or operation not permitted\n`, exitCode: 1 };
+      let sig = 15;
+      if (sigArg) {
+        const flag = sigArg.replace(/^-/, '').toUpperCase();
+        if (flag === '9' || flag === 'KILL' || flag === 'SIGKILL') sig = 9;
+        else if (flag === '15' || flag === 'TERM' || flag === 'SIGTERM') sig = 15;
+        else if (flag === '19' || flag === 'STOP' || flag === 'SIGSTOP') sig = 19;
+        else if (flag === '18' || flag === 'CONT' || flag === 'SIGCONT') sig = 18;
+        else if (flag === '2' || flag === 'INT' || flag === 'SIGINT') sig = 2;
+        else if (!isNaN(parseInt(flag, 10))) sig = parseInt(flag, 10);
+      }
+
+      const res = await syscall(SyscallNo.SYS_KILL, pid, sig);
+      if (res.code !== 0) return { stdout: '', stderr: `bash: kill: (${pid}) - No such process\n`, exitCode: 1 };
 
       return { stdout: '', stderr: '', exitCode: 0 };
     },

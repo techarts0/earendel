@@ -65,13 +65,16 @@ class FirewallEngine {
   public isPortAllowed(port: number, protocol: 'tcp' | 'udp' = 'tcp'): boolean {
     if (!this.enabled) return true;
 
-    // Check matching rules (last matching or first drop rule)
-    const matchingDrop = this.rules.find((r) => (r.action === 'DROP' || r.action === 'REJECT') && (r.port === undefined || r.port === port) && (r.protocol === 'all' || r.protocol === protocol));
-    if (matchingDrop) {
-      return false; // Blocked by firewall!
+    // iptables first-match evaluation order
+    for (const rule of this.rules) {
+      const matchPort = rule.port === undefined || rule.port === port;
+      const matchProto = rule.protocol === 'all' || rule.protocol === protocol;
+      if (matchPort && matchProto) {
+        return rule.action === 'ALLOW' || (rule.action as string) === 'ACCEPT';
+      }
     }
 
-    return true; // Default allow
+    return true; // Default allow policy
   }
 }
 

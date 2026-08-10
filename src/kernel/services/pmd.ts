@@ -3,20 +3,16 @@ import { globalIPCBus } from '../ipcBus';
 import { globalTaskScheduler } from '../taskScheduler';
 import { IPCMessage } from '../types';
 
-export class PMDaemonService {
-  public static readonly PID = 3;
-  public static readonly SERVICE_NAME = 'pmd';
+export class PMDaemon {
+  private pmdPid = 3;
+  private nextPid = 200;
 
   constructor() {
-    this.startServer();
+    this.registerPMDaemon();
   }
 
-  public startServer() {
-    globalIPCBus.registerService(
-      PMDaemonService.SERVICE_NAME,
-      PMDaemonService.PID,
-      async (msg: IPCMessage) => this.handleIPCMessage(msg)
-    );
+  private registerPMDaemon() {
+    globalIPCBus.registerService('pmd', this.pmdPid, this.handleIPCMessage.bind(this));
   }
 
   private async handleIPCMessage(msg: IPCMessage): Promise<any> {
@@ -28,7 +24,7 @@ export class PMDaemonService {
       }
 
       case 'SYS_FORK': {
-        const newPid = Math.floor(Math.random() * 800) + 200;
+        const newPid = this.nextPid++;
         const pcb = globalTaskScheduler.createProcess({
           pid: newPid,
           ppid: msg.senderPid,
@@ -40,20 +36,52 @@ export class PMDaemonService {
           rssKB: 8000,
           cpuUsagePercent: 0.2,
           cwd: payload.cwd || '/home/hello',
-          fds: new Map([[0, '/dev/stdin'], [1, '/dev/stdout'], [2, '/dev/stderr']]),
+          fds: new Map([
+            [0, { fd: 0, path: '/dev/stdin', offset: 0, flags: 'r' }],
+            [1, { fd: 1, path: '/dev/stdout', offset: 0, flags: 'w' }],
+            [2, { fd: 2, path: '/dev/stderr', offset: 0, flags: 'w' }],
+          ]),
         });
         return { childPid: pcb.pid };
       }
 
+      case 'SYS_WAITPID': {
+        const targetPid = payload.pid;
+        if (targetPid) {
+          globalTaskScheduler.terminateProcess(targetPid);
+        }
+        return { status: 0, pid: targetPid };
+      }
+
+      case 'SYS_KILL': {
+        const targetPid = payload.pid;
+        const sig = payload.sig || 15;
+        const pcb = globalTaskScheduler.getProcess(targetPid);
+        if (!pcb) return { success: false, error: 'ESRCH: No such process' };
+
+        if (sig === 9 || sig === 15) {
+          globalTaskScheduler.terminateProcess(targetPid);
+        } else if (sig === 19) {
+          globalTaskScheduler.updateState(targetPid, 'BLOCKED');
+        } else if (sig === 18) {
+          globalTaskScheduler.updateState(targetPid, 'RUNNING');
+        }
+
+        if (!pcb.pendingSignals) pcb.pendingSignals = [];
+        pcb.pendingSignals.push(sig);
+        return { success: true, pid: targetPid, sig };
+      }
+
       case 'SYS_EXIT': {
-        const ok = globalTaskScheduler.terminateProcess(msg.senderPid);
-        return { terminated: ok };
+        const pidToTerminate = payload.pid || msg.senderPid;
+        const ok = globalTaskScheduler.terminateProcess(pidToTerminate);
+        return { terminated: ok, pid: pidToTerminate };
       }
 
       default:
-        throw new Error(`[pmd Error] Unknown action '${action}' received.`);
+        throw new Error(`PMD: Unknown action ${action}`);
     }
   }
 }
 
-export const globalPMDaemon = new PMDaemonService();
+export const globalPMDaemon = new PMDaemon();

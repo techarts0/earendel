@@ -3,68 +3,33 @@ import { Command } from '../types';
 
 export const userCommands: Command[] = [
   {
-    name: 'chmod',
-    description: 'Change file mode bits (permissions)',
-    category: 'file',
-    execute: (ctx) => {
-      const recursive = ctx.args.includes('-R') || ctx.args.includes('-r');
-      const mode = ctx.args.find((a) => !a.startsWith('-'));
-      const file = ctx.args.slice(ctx.args.indexOf(mode!) + 1).find((a) => !a.startsWith('-'));
-
-      if (!mode || !file) {
-        return { stdout: '', stderr: 'chmod: missing operand\nUsage: chmod [-R] MODE FILE\n', exitCode: 1 };
-      }
-
-      const ok = ctx.vfs.chmod(file, mode, recursive);
-      if (!ok) {
-        return { stdout: '', stderr: `chmod: cannot access '${file}': No such file or directory\n`, exitCode: 1 };
-      }
-      return { stdout: '', stderr: '', exitCode: 0 };
-    },
-  },
-  {
     name: 'chown',
     description: 'Change file owner and group',
     category: 'file',
     execute: (ctx) => {
       const recursive = ctx.args.includes('-R') || ctx.args.includes('-r');
-      const ownerGroup = ctx.args.find((a) => !a.startsWith('-'));
-      const file = ctx.args.slice(ctx.args.indexOf(ownerGroup!) + 1).find((a) => !a.startsWith('-'));
+      const owner = ctx.args.find((a) => !a.startsWith('-'));
+      const file = ctx.args.slice(ctx.args.indexOf(owner!) + 1).find((a) => !a.startsWith('-'));
 
-      if (!ownerGroup || !file) {
-        return { stdout: '', stderr: 'chown: missing operand\nUsage: chown [-R] OWNER:GROUP FILE\n', exitCode: 1 };
+      if (!owner || !file) {
+        return { stdout: '', stderr: 'chown: missing operand\nUsage: chown [-R] OWNER[:GROUP] FILE\n', exitCode: 1 };
       }
 
-      const ok = ctx.vfs.chown(file, ownerGroup, recursive);
-      if (!ok) {
+      const node = ctx.vfs.getNodeByPath(file);
+      if (!node) {
         return { stdout: '', stderr: `chown: cannot access '${file}': No such file or directory\n`, exitCode: 1 };
       }
+
+      const parts = owner.split(':');
+      node.owner = parts[0];
+      if (parts[1]) node.group = parts[1];
+
       return { stdout: '', stderr: '', exitCode: 0 };
     },
   },
   {
-    name: 'umask',
-    description: 'Get or set the file mode creation mask',
-    category: 'sys',
-    execute: () => {
-      return { stdout: '0022\n', stderr: '', exitCode: 0 };
-    },
-  },
-  {
-    name: 'id',
-    description: 'Print real and effective user and group IDs',
-    category: 'sys',
-    execute: (ctx) => {
-      const user = ctx.env['USER'] || 'hello';
-      if (user === 'root') {
-        return { stdout: 'uid=0(root) gid=0(root) groups=0(root)\n', stderr: '', exitCode: 0 };
-      }
-      return { stdout: `uid=1000(${user}) gid=1000(${user}) groups=1000(${user})\n`, stderr: '', exitCode: 0 };
-    },
-  },
-  {
     name: 'useradd',
-    description: 'Create a new user or update default new user information',
+    description: 'Create a new user',
     category: 'sys',
     execute: (ctx) => {
       const username = ctx.args.find((a) => !a.startsWith('-'));
@@ -75,9 +40,14 @@ export const userCommands: Command[] = [
         return { stdout: '', stderr: `useradd: user '${username}' already exists\n`, exitCode: 9 };
       }
 
-      const uid = 1000 + Math.floor(Math.random() * 8000);
+      const existingUids = passwdContent
+        .split('\n')
+        .map((l) => parseInt(l.split(':')[2], 10))
+        .filter((u) => !isNaN(u));
+      const uid = existingUids.length > 0 ? Math.max(...existingUids, 999) + 1 : 1000;
+
       const newPasswdLine = `${username}:x:${uid}:${uid}:${username}:/home/${username}:/bin/bash\n`;
-      ctx.vfs.writeFile('/etc/passwd', passwdContent + newPasswdLine);
+      ctx.vfs.writeFile('/etc/passwd', passwdContent + (passwdContent.endsWith('\n') ? '' : '\n') + newPasswdLine);
 
       const shadowContent = ctx.vfs.readFile('/etc/shadow') ?? '';
       ctx.vfs.writeFile('/etc/shadow', shadowContent + `${username}:${username}:19000:0:99999:7:::\n`);
@@ -123,7 +93,7 @@ export const userCommands: Command[] = [
 
       ctx.env['USER'] = username;
       ctx.env['HOME'] = username === 'root' ? '/root' : `/home/${username}`;
-      ctx.vfs.changeDirectory(ctx.env['HOME']);
+      ctx.vfs.changeDirectory(ctx.env['HOME'], username);
 
       return { stdout: `Switched to user ${username}.\n`, stderr: '', exitCode: 0 };
     },
@@ -275,15 +245,6 @@ export const userCommands: Command[] = [
         exitCode: 0,
         loginPrompt: { username: targetUser },
       };
-    },
-  },
-  {
-    name: 'whoami',
-    description: 'Print effective userid',
-    category: 'sys',
-    execute: (ctx) => {
-      const user = ctx.env['USER'] || 'hello';
-      return { stdout: `${user}\n`, stderr: '', exitCode: 0 };
     },
   },
   {

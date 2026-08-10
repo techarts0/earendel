@@ -42,8 +42,8 @@ export class CommandRegistry {
       if (this.isShellBuiltin(cmd.name)) return;
 
       const symPath = `/usr/bin/${cmd.name}`;
-      vfs.writeFile(symPath, `#!/usr/bin/env node\n# Executable Binary Symbol for ${cmd.name}\n`);
-      vfs.chmod(symPath, 'rwxr-xr-x');
+      vfs.writeFile(symPath, `#!/usr/bin/env node\n# Executable Binary Symbol for ${cmd.name}\n`, 'root');
+      vfs.chmod(symPath, '755');
     });
 
     if (typeof vfs.notify === 'function') {
@@ -51,12 +51,19 @@ export class CommandRegistry {
     }
   }
 
+  private syncTimer: any = null;
+
   public register(cmd: Command): void {
     this.commands.set(cmd.name, cmd);
     if (cmd.aliases) {
       cmd.aliases.forEach((alias) => this.commands.set(alias, cmd));
     }
-    this.syncAllSymbolsToVFS();
+    if (!this.syncTimer) {
+      this.syncTimer = setTimeout(() => {
+        this.syncTimer = null;
+        this.syncAllSymbolsToVFS();
+      }, 50);
+    }
   }
 
   public unregister(name: string): boolean {
@@ -94,15 +101,12 @@ export class CommandRegistry {
     // Authentic Linux Executable Binary Mode: Verify physical binary existence & permissions under /usr/bin/
     if (!this.isShellBuiltin(cmd.name) && ctx.vfs) {
       const symPath = `/usr/bin/${cmd.name}`;
-      const node = ctx.vfs.getNodeByPath(symPath);
+      let node = ctx.vfs.getNodeByPath(symPath);
       if (!node) {
-        return {
-          stdout: '',
-          stderr: `bash: ${name}: No such file or directory\n`,
-          exitCode: 127,
-        };
+        this.syncAllSymbolsToVFS(ctx.vfs);
+        node = ctx.vfs.getNodeByPath(symPath);
       }
-      if (!node.permissions.includes('x')) {
+      if (node && !ctx.vfs.checkPermission(node, 'x', ctx.env['USER'] || 'hello')) {
         return {
           stdout: '',
           stderr: `bash: ${symPath}: Permission denied\n`,

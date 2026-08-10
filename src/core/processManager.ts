@@ -91,7 +91,11 @@ export class ProcessManager {
       rssKB: 2000,
       cpuUsagePercent: 0.1,
       cwd: '/home/hello',
-      fds: new Map([[0, '/dev/stdin'], [1, '/dev/stdout'], [2, '/dev/stderr']]),
+      fds: new Map([
+        [0, { fd: 0, path: '/dev/stdin', offset: 0, flags: 'r' }],
+        [1, { fd: 1, path: '/dev/stdout', offset: 0, flags: 'w' }],
+        [2, { fd: 2, path: '/dev/stderr', offset: 0, flags: 'w' }],
+      ]),
     });
 
     const jobId = this.nextJobId++;

@@ -1,6 +1,5 @@
-// Earendel Behavioral Shell Engine powered by CommandRegistry & VFS
-import { globalVFS } from './vfs';
-import { globalProcessManager } from './processManager';
+import { globalVFS, VirtualFileSystem } from './vfs';
+import { globalProcessManager, ProcessManager } from './processManager';
 import { globalCommandRegistry } from './commandRegistry';
 import { ExecutionContext, ExecutionResult } from './types';
 import { Language } from '../i18n/translations';
@@ -9,9 +8,13 @@ import { SyscallNo } from '../kernel/types';
 import './commands'; // Ensure all command plugins are auto-registered
 
 export class ShellEngine {
+  public vfs: VirtualFileSystem;
+  public processManager: ProcessManager;
+
   private env: Record<string, string> = {
     USER: 'hello',
     HOME: '/home/hello',
+    PWD: '/home/hello',
     SHELL: '/bin/bash',
     TERM: 'xterm-256color',
     PATH: '/bin:/usr/bin',
@@ -23,7 +26,9 @@ export class ShellEngine {
 
   private lastExitCode: number = 0;
 
-  constructor() {
+  constructor(vfs: VirtualFileSystem = globalVFS, processManager: ProcessManager = globalProcessManager) {
+    this.vfs = vfs;
+    this.processManager = processManager;
     this.env['?'] = '0';
     this.initDefaultAliases();
   }
@@ -78,6 +83,32 @@ export class ShellEngine {
     });
   }
 
+  private async expandCommandSubstitutions(text: string, scriptArgs: string[] = []): Promise<string> {
+    let result = text;
+
+    // 1. Process $(command)
+    let dollarMatch = result.match(/\$\(([^)]+)\)/);
+    while (dollarMatch) {
+      const subCmd = dollarMatch[1];
+      const res = await this.execute(subCmd, scriptArgs);
+      const replacement = (res.stdout || '').replace(/\r?\n$/, '');
+      result = result.replace(dollarMatch[0], replacement);
+      dollarMatch = result.match(/\$\(([^)]+)\)/);
+    }
+
+    // 2. Process `command`
+    let backtickMatch = result.match(/`([^`]+)`/);
+    while (backtickMatch) {
+      const subCmd = backtickMatch[1];
+      const res = await this.execute(subCmd, scriptArgs);
+      const replacement = (res.stdout || '').replace(/\r?\n$/, '');
+      result = result.replace(backtickMatch[0], replacement);
+      backtickMatch = result.match(/`([^`]+)`/);
+    }
+
+    return result;
+  }
+
   async execute(commandLine: string, scriptArgs: string[] = []): Promise<ExecutionResult> {
     const trimmed = commandLine.trim();
     if (!trimmed || trimmed.startsWith('#')) {
@@ -86,7 +117,8 @@ export class ShellEngine {
 
     const aliased = this.expandAlias(trimmed);
     this.history.push(aliased);
-    const expanded = this.expandVariables(aliased, scriptArgs);
+    const substituted = await this.expandCommandSubstitutions(aliased, scriptArgs);
+    const expanded = this.expandVariables(substituted, scriptArgs);
 
     if (this.isShellControlFlow(expanded)) {
       const res = await this.executeControlFlow(expanded, scriptArgs);
@@ -114,18 +146,18 @@ export class ShellEngine {
         }
 
         if (currentOp === 'INIT') {
-          lastRes = await this.executeSingleCommand(token, '');
+          lastRes = await this.executeControlFlow(token, scriptArgs);
           stdoutAcc += lastRes.stdout;
           if (lastRes.stderr) stderrAcc += lastRes.stderr;
         } else if (currentOp === 'AND') {
           if (lastRes.exitCode === 0) {
-            lastRes = await this.executeSingleCommand(token, '');
+            lastRes = await this.executeControlFlow(token, scriptArgs);
             stdoutAcc += lastRes.stdout;
             if (lastRes.stderr) stderrAcc += lastRes.stderr;
           }
         } else if (currentOp === 'OR') {
           if (lastRes.exitCode !== 0) {
-            lastRes = await this.executeSingleCommand(token, '');
+            lastRes = await this.executeControlFlow(token, scriptArgs);
             stdoutAcc += lastRes.stdout;
             if (lastRes.stderr) stderrAcc += lastRes.stderr;
           }
@@ -136,16 +168,62 @@ export class ShellEngine {
       return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastRes.exitCode };
     }
 
-    // Pipe | handling
-    if (expanded.includes('|')) {
-      const pipelineCmds = expanded.split('|').map((c) => c.trim());
+    // Pipe | handling (single pipe | not part of ||)
+    if (/(?<!\|)\|(?!\|)/.test(expanded)) {
+      const pipelineCmds = expanded.split(/(?<!\|)\|(?!\|)/).map((c) => c.trim());
+      let currentStream: AsyncIterable<string> | null = null;
       let inputData = '';
       let lastResult: ExecutionResult = { stdout: '', stderr: '', exitCode: 0 };
 
-      for (const cmdStr of pipelineCmds) {
-        lastResult = await this.executeSingleCommand(cmdStr, inputData);
-        if (lastResult.exitCode !== 0) break;
-        inputData = lastResult.stdout;
+      for (let i = 0; i < pipelineCmds.length; i++) {
+        const cmdStr = pipelineCmds[i];
+        const parts = cmdStr.split(/\s+/).filter(Boolean);
+        const cmdName = parts[0];
+        const cmdObj = globalCommandRegistry.getCommand(cmdName);
+
+        if (cmdObj && cmdObj.executeStream) {
+          const cmdArgs = parts.slice(1);
+          const ctx: ExecutionContext = {
+            vfs: this.vfs,
+            env: this.env,
+            lang: this.lang,
+            args: cmdArgs,
+            pipeInput: inputData,
+            processManager: this.processManager,
+          };
+
+          const inputStream: AsyncIterable<string> = currentStream || (async function* () {
+            if (inputData) {
+              const lines = inputData.split('\n');
+              for (let idx = 0; idx < lines.length; idx++) {
+                yield lines[idx] + (idx < lines.length - 1 ? '\n' : '');
+              }
+            }
+          })();
+
+          currentStream = cmdObj.executeStream(ctx, inputStream);
+        } else {
+          if (currentStream) {
+            let collected = '';
+            for await (const chunk of currentStream) {
+              collected += chunk;
+            }
+            inputData = collected;
+            currentStream = null;
+          }
+
+          lastResult = await this.executeSingleCommand(cmdStr, inputData);
+          if (lastResult.exitCode !== 0) break;
+          inputData = lastResult.stdout;
+        }
+      }
+
+      if (currentStream) {
+        let finalOutput = '';
+        for await (const chunk of currentStream) {
+          finalOutput += chunk;
+        }
+        lastResult = { stdout: finalOutput, stderr: '', exitCode: 0 };
       }
 
       this.env['?'] = lastResult.exitCode.toString();
@@ -302,17 +380,25 @@ export class ShellEngine {
     const args = this.parseArgs(rawCmd);
     if (args.length === 0) return { stdout: '', stderr: '', exitCode: 0 };
 
-    // Support VAR=value assignment syntax
-    if (args.length === 1 && /^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(args[0])) {
-      const eqIdx = args[0].indexOf('=');
-      const key = args[0].substring(0, eqIdx);
-      const val = args[0].substring(eqIdx + 1).replace(/^["']|["']$/g, '');
-      this.setEnv(key, val);
-      return { stdout: '', stderr: '', exitCode: 0 };
+    // Support inline VAR=value assignment syntax & childEnv isolation
+    const childEnv = { ...this.env };
+    let cmdIdx = 0;
+    while (cmdIdx < args.length && /^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(args[cmdIdx])) {
+      const eqIdx = args[cmdIdx].indexOf('=');
+      const key = args[cmdIdx].substring(0, eqIdx);
+      const val = args[cmdIdx].substring(eqIdx + 1).replace(/^["']|["']$/g, '');
+      if (args.length === 1) {
+        this.setEnv(key, val);
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+      childEnv[key] = val;
+      cmdIdx++;
     }
 
-    const cmdName = args[0];
-    const cmdArgs = args.slice(1);
+    if (cmdIdx >= args.length) return { stdout: '', stderr: '', exitCode: 0 };
+
+    const cmdName = args[cmdIdx];
+    const cmdArgs = args.slice(cmdIdx + 1);
 
     let res: ExecutionResult = { stdout: '', stderr: '', exitCode: 0 };
 
@@ -331,10 +417,10 @@ export class ShellEngine {
         const childPid = forkRes.data || 401;
         await syscall(SyscallNo.SYS_EXECVE, scriptPath, cmdArgs);
 
-        const content = globalVFS.readFile(scriptPath) ?? '';
+        const content = globalVFS.readFile(scriptPath, this.env['USER'] || 'hello') ?? '';
 
         // Check for EAF Magic Header (EAF01 or EAF\x01)
-        const isEaf = scriptPath.endsWith('.eaf') || content.includes('"magic"') && content.includes('EAF');
+        const isEaf = scriptPath.endsWith('.eaf') || (content.includes('"magic"') && content.includes('EAF'));
 
         if (isEaf) {
           try {
@@ -347,7 +433,7 @@ export class ShellEngine {
               const wasmBytes = new TextEncoder().encode(textSection);
               const ctx: ExecutionContext = {
                 vfs: globalVFS,
-                env: this.env,
+                env: childEnv,
                 lang: this.lang,
                 args: cmdArgs,
                 pipeInput,
@@ -358,7 +444,7 @@ export class ShellEngine {
               const { globalJsEngine } = await import('./jsRuntime');
               const ctx: ExecutionContext = {
                 vfs: globalVFS,
-                env: this.env,
+                env: childEnv,
                 lang: this.lang,
                 args: cmdArgs,
                 pipeInput,
@@ -376,15 +462,15 @@ export class ShellEngine {
         await syscall(SyscallNo.SYS_WAITPID, childPid);
       }
     } else {
+      const isBuiltin = ['cd', 'export', 'unset', 'alias', 'unalias', 'exit', 'su', 'source', '.'].includes(cmdName);
       const ctx: ExecutionContext = {
         vfs: globalVFS,
-        env: this.env,
+        env: isBuiltin ? this.env : childEnv,
         lang: this.lang,
         args: cmdArgs,
         pipeInput,
         processManager: globalProcessManager,
       };
-      globalCommandRegistry.syncAllSymbolsToVFS(globalVFS);
       res = await globalCommandRegistry.execute(cmdName, ctx);
     }
 

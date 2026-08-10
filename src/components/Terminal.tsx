@@ -2,18 +2,19 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Terminal as XTerminal } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import { WebLinksAddon } from '@xterm/addon-web-links';
-import { globalShellEngine } from '../core/shellEngine';
+import { ShellEngine } from '../core/shellEngine';
 import { globalVFS } from '../core/vfs';
+import { globalProcessManager } from '../core/processManager';
 import { globalCommandRegistry } from '../core/commandRegistry';
 import { registerAllCommands } from '../core/commands';
 import { Language } from '../i18n/translations';
-import { highlightCommandLine } from '../core/syntaxHighlighter';
 import { globalSoundEngine } from '../core/soundEngine';
 import { globalThemeManager, THEME_PRESETS } from '../core/themeManager';
+import { highlightCommandLine } from '../core/syntaxHighlighter';
 
 interface TerminalProps {
-  onOpenNano?: (nanoData: { path: string; content: string }) => void;
-  onOpenVi?: (viData: { path: string; content: string }) => void;
+  onOpenNano?: (opts: { path: string; content: string }) => void;
+  onOpenVi?: (opts: { path: string; content: string }) => void;
   onOpenCheat?: () => void;
   onSplitTmux?: (type: 'v' | 'h' | 'exit') => void;
   skipBootScreen?: boolean;
@@ -26,6 +27,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
   const inputBufferRef = useRef<string>('');
   const [lang, setLang] = useState<Language>('en');
 
+  const shellEngineRef = useRef<ShellEngine>(new ShellEngine(globalVFS, globalProcessManager));
   const pendingLoginUserRef = useRef<string | null>(null);
   const isInitialBootLoginRef = useRef<boolean>(true);
   const pendingSudoCmdRef = useRef<{ username: string; commandLine: string } | null>(null);
@@ -33,8 +35,8 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
 
   const promptStr = () => {
     const pwd = globalVFS.getPwd();
-    const user = globalShellEngine.getEnv('USER') || 'hello';
-    const home = globalShellEngine.getEnv('HOME') || '/home/hello';
+    const user = shellEngineRef.current.getEnv('USER') || 'hello';
+    const home = shellEngineRef.current.getEnv('HOME') || '/home/hello';
     let shortPwd = pwd;
 
     if (pwd === home) {
@@ -51,7 +53,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
   };
 
   useEffect(() => {
-    globalShellEngine.lang = lang;
+    shellEngineRef.current.lang = lang;
   }, [lang]);
 
   useEffect(() => {
@@ -168,10 +170,10 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
           }
 
           // Elevate temporarily to root to run command
-          const prevUser = globalShellEngine.getEnv('USER');
-          globalShellEngine.setEnv('USER', 'root');
-          const res = await globalShellEngine.execute(commandLine);
-          globalShellEngine.setEnv('USER', prevUser);
+          const prevUser = shellEngineRef.current.getEnv('USER');
+          shellEngineRef.current.setEnv('USER', 'root');
+          const res = await shellEngineRef.current.execute(commandLine);
+          shellEngineRef.current.setEnv('USER', prevUser);
 
           if (res.stdout) term.write(res.stdout.replace(/\n/g, '\r\n'));
           if (res.stderr) term.write(`\x1b[31m${res.stderr.replace(/\n/g, '\r\n')}\x1b[0m`);
@@ -188,8 +190,9 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
           const shadowContent = globalVFS.readFile('/etc/shadow') ?? '';
           const userShadowLine = shadowContent.split('\n').find((l) => l.startsWith(`${targetUser}:`));
           const expectedPass = userShadowLine ? userShadowLine.split(':')[1] : '123456';
+          const isPassValid = enteredPassword === '123456' || enteredPassword === expectedPass || (enteredPassword === '123456' && expectedPass.startsWith('$6$'));
 
-          if (enteredPassword !== expectedPass && enteredPassword !== '123456') {
+          if (!isPassValid) {
             term.writeln('\x1b[31mLogin incorrect\x1b[0m\r\n');
             if (isInitialBootLoginRef.current) {
               term.write('earendel login: ');
@@ -199,9 +202,9 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
             return;
           }
 
-          globalShellEngine.setEnv('USER', targetUser);
+          shellEngineRef.current.setEnv('USER', targetUser);
           const home = targetUser === 'root' ? '/root' : `/home/${targetUser}`;
-          globalShellEngine.setEnv('HOME', home);
+          shellEngineRef.current.setEnv('HOME', home);
           globalVFS.mkdir(home, true);
           globalVFS.changeDirectory(home);
 
@@ -220,10 +223,10 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
           if (cmd === 'lang zh' || cmd === 'lang en') {
             const targetLang = cmd === 'lang zh' ? 'zh' : 'en';
             setLang(targetLang);
-            globalShellEngine.lang = targetLang;
+            shellEngineRef.current.lang = targetLang;
             term.writeln(`Language set to ${targetLang === 'zh' ? '中文' : 'English'}.\r\n`);
           } else {
-            const res = await globalShellEngine.execute(cmd);
+            const res = await shellEngineRef.current.execute(cmd);
             if (res.stdout) {
               term.write(res.stdout.replace(/\n/g, '\r\n'));
             }
@@ -250,8 +253,8 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
             }
 
             if (res.logout) {
-              globalShellEngine.setEnv('USER', 'hello');
-              globalShellEngine.setEnv('HOME', '/home/hello');
+              shellEngineRef.current.setEnv('USER', 'hello');
+              shellEngineRef.current.setEnv('HOME', '/home/hello');
               globalVFS.changeDirectory('/home/hello');
               isInitialBootLoginRef.current = true;
               term.clear();
@@ -335,7 +338,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
         }
       } else if (key === '\x1b[A') {
         // Up Arrow Key
-        const history = globalShellEngine.getHistory();
+        const history = shellEngineRef.current.getHistory();
         if (history.length === 0) return;
 
         if (historyIndexRef.current === -1) {
@@ -354,7 +357,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
         term.write(highlightCommandLine(selectedCmd));
       } else if (key === '\x1b[B') {
         // Down Arrow Key
-        const history = globalShellEngine.getHistory();
+        const history = shellEngineRef.current.getHistory();
         if (historyIndexRef.current !== -1) {
           historyIndexRef.current++;
           let selectedCmd = '';

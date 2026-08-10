@@ -1,6 +1,7 @@
 // Earendel Behavioral Engine Core Interfaces & Types
 import { VirtualFileSystem, VFSNode } from './vfs';
 import { Language } from '../i18n/translations';
+import type { ProcessManager } from './processManager';
 
 export interface ExecutionContext {
   vfs: VirtualFileSystem;
@@ -8,7 +9,7 @@ export interface ExecutionContext {
   lang: Language;
   args: string[];
   pipeInput?: string;
-  processManager: any;
+  processManager: ProcessManager;
 }
 
 export interface ExecutionResult {
@@ -47,4 +48,5 @@ export interface Command {
   description: string;
   category: 'file' | 'text' | 'sys' | 'archive' | 'editor' | 'net';
   execute(ctx: ExecutionContext): Promise<ExecutionResult> | ExecutionResult;
+  executeStream?: (ctx: ExecutionContext, inputStream?: AsyncIterable<string>) => AsyncGenerator<string, void, unknown>;
 }

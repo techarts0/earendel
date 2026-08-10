@@ -51,6 +51,44 @@ export const textCommands: Command[] = [
         exitCode: matchedLines.length > 0 ? 0 : 1,
       };
     },
+    executeStream: async function* (ctx, inputStream) {
+      const ignoreCase = ctx.args.includes('-i');
+      const invert = ctx.args.includes('-v');
+      const showLineNum = ctx.args.includes('-n');
+      const nonFlags = ctx.args.filter((a) => !a.startsWith('-'));
+      if (nonFlags.length === 0) return;
+
+      const patternStr = nonFlags[0];
+      const filePath = nonFlags[1];
+      const regex = new RegExp(patternStr, ignoreCase ? 'i' : '');
+
+      let lineCount = 0;
+      const processLine = (line: string): string | null => {
+        lineCount++;
+        const matches = regex.test(line);
+        if (invert ? !matches : matches) {
+          const prefix = showLineNum ? `${lineCount}:` : '';
+          return prefix + line + (line.endsWith('\n') ? '' : '\n');
+        }
+        return null;
+      };
+
+      if (inputStream) {
+        for await (const chunk of inputStream) {
+          const lines = chunk.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            const res = processLine(lines[i]);
+            if (res !== null) yield res;
+          }
+        }
+      } else if (filePath) {
+        const text = ctx.vfs.readFile(filePath, ctx.env['USER'] || 'hello') ?? '';
+        for (const line of text.split('\n')) {
+          const res = processLine(line);
+          if (res !== null) yield res;
+        }
+      }
+    },
   },
   {
     name: 'sed',

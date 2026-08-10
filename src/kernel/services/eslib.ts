@@ -7,11 +7,20 @@ export const ESLIB_SOURCE_CODE = `// Earendel System Library (eslib.js v1.0.0)
 (function(global) {
   const eslib = {
     sys: {
-      read: function(path) {
-        return global.syscall ? global.syscall(0, path) : null;
+      open: function(path, flags) {
+        return global.syscall ? global.syscall(2, path, flags || 'r') : null;
       },
-      write: function(path, content) {
-        return global.syscall ? global.syscall(1, path, content) : null;
+      close: function(fd) {
+        return global.syscall ? global.syscall(3, fd) : null;
+      },
+      read: function(target, count) {
+        return global.syscall ? global.syscall(0, target, count) : null;
+      },
+      write: function(target, content) {
+        return global.syscall ? global.syscall(1, target, content) : null;
+      },
+      lseek: function(fd, offset, whence) {
+        return global.syscall ? global.syscall(8, fd, offset || 0, whence || 0) : null;
       },
       fork: function(name, cwd) {
         return global.syscall ? global.syscall(57, name || 'child_proc', cwd || '/home/hello') : null;

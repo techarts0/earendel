@@ -1,7 +1,8 @@
-// Behavioral Network & Additional Archive Commands for Earendel
 import { Command } from '../types';
 import { resolveHostToIp } from './netCommands';
 import { globalFirewallEngine } from '../firewallEngine';
+import { syscall } from '../../kernel/syscall';
+import { SyscallNo } from '../../kernel/types';
 
 export const netArchiveCommands: Command[] = [
   {
@@ -28,75 +29,156 @@ export const netArchiveCommands: Command[] = [
   },
   {
     name: 'curl',
-    description: 'Transfer data from or to a server',
+    description: 'Transfer data from or to a server (Enhanced with CORS Proxy & JSON Pretty Printing)',
     category: 'sys',
     execute: async (ctx) => {
-      const url = ctx.args.find((a) => a.startsWith('http://') || a.startsWith('https://')) || ctx.args[0];
-      if (!url) return { stdout: '', stderr: 'curl: try \'curl --help\' for more information\n', exitCode: 2 };
+      let rawUrl = ctx.args.find((a) => a.startsWith('http://') || a.startsWith('https://') || (a.includes('.') && !a.startsWith('-')));
+      if (!rawUrl) return { stdout: '', stderr: 'curl: try \'curl --help\' for more information\n', exitCode: 2 };
+
+      if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+        rawUrl = 'https://' + rawUrl;
+      }
 
       // Firewall Rule Enforcement
       if (!globalFirewallEngine.isPortAllowed(80, 'tcp')) {
         return { stdout: '', stderr: `curl: (7) Failed to connect to port 80: Connection refused (Blocked by Firewall)\n`, exitCode: 7 };
       }
 
-      try {
-        const res = await fetch(url, { method: 'GET' });
-        const text = await res.text();
-        return { stdout: text + '\n', stderr: '', exitCode: 0 };
-      } catch (err) {
-        // Fallback for CORS restricted endpoints with realistic HTTP response headers
-        return {
-          stdout: `HTTP/1.1 200 OK
-Date: ${new Date().toUTCString()}
-Server: Earendel-Web-Terminal/1.0
-Content-Type: text/html; charset=UTF-8
-Connection: keep-alive
+      const showHeadersOnly = ctx.args.includes('-I') || ctx.args.includes('--head');
+      const includeHeaders = ctx.args.includes('-i');
+      const oIdx = ctx.args.indexOf('-o');
+      const outFile = oIdx !== -1 ? ctx.args[oIdx + 1] : null;
 
-<!DOCTYPE html>
-<html>
-<head><title>Welcome to ${url}</title></head>
-<body>
-<h1>Hello from Earendel Web Engine!</h1>
-<p>Successfully fetched response payload for ${url}</p>
-</body>
-</html>\n`,
+      const methodIdx = ctx.args.indexOf('-X');
+      const method = methodIdx !== -1 ? ctx.args[methodIdx + 1].toUpperCase() : 'GET';
+
+      const dataIdx = ctx.args.indexOf('-d');
+      const bodyData = dataIdx !== -1 ? ctx.args[dataIdx + 1] : undefined;
+
+      let fetchedResponse: Response | null = null;
+      let bodyText = '';
+      let isCorsProxied = false;
+
+      try {
+        // Primary Direct Fetch
+        fetchedResponse = await fetch(rawUrl, {
+          method,
+          headers: bodyData ? { 'Content-Type': 'application/json' } : undefined,
+          body: bodyData,
+        });
+        bodyText = await fetchedResponse.text();
+      } catch (err) {
+        // Secondary Smart CORS Proxy Fallback for WebOS Browsers
+        try {
+          const corsProxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(rawUrl)}`;
+          fetchedResponse = await fetch(corsProxyUrl, { method });
+          bodyText = await fetchedResponse.text();
+          isCorsProxied = true;
+        } catch (corsErr) {
+          // Tertiary Fallback Mock Headers
+          bodyText = `{\n  "status": "success",\n  "message": "Earendel WebOS Network Engine active for ${rawUrl}",\n  "protocol": "HTTP/1.1",\n  "timestamp": "${new Date().toISOString()}"\n}`;
+        }
+      }
+
+      const status = fetchedResponse ? fetchedResponse.status : 200;
+      const statusText = fetchedResponse ? fetchedResponse.statusText || 'OK' : 'OK';
+      const contentType = fetchedResponse?.headers.get('content-type') || 'text/html';
+
+      let headerBlock = `HTTP/1.1 \x1b[1;32m${status} ${statusText}\x1b[0m\n`;
+      headerBlock += `Date: ${new Date().toUTCString()}\n`;
+      headerBlock += `Server: Earendel-POSIX-WebOS/1.0\n`;
+      headerBlock += `Content-Type: ${contentType}\n`;
+      if (isCorsProxied) {
+        headerBlock += `X-Earendel-Proxy: CORS-Bridge-Active\n`;
+      }
+      headerBlock += `\n`;
+
+      // Auto Pretty Print JSON
+      let formattedBody = bodyText;
+      if (contentType.includes('application/json') || (bodyText.startsWith('{') && bodyText.endsWith('}'))) {
+        try {
+          const parsed = JSON.parse(bodyText);
+          formattedBody = JSON.stringify(parsed, null, 2);
+        } catch (e) {}
+      }
+
+      // Save output to file via POSIX syscall SYS_WRITE -> vfsd IPC
+      if (outFile) {
+        await syscall(SyscallNo.SYS_WRITE, outFile, bodyText);
+        return {
+          stdout: `\x1b[32m[curl]\x1b[0m Transferred ${bodyText.length} bytes -> Saved to \x1b[1;36m${outFile}\x1b[0m (via vfsd SYS_WRITE)\n`,
           stderr: '',
           exitCode: 0,
         };
       }
+
+      if (showHeadersOnly) {
+        return { stdout: headerBlock, stderr: '', exitCode: 0 };
+      }
+
+      if (includeHeaders) {
+        return { stdout: headerBlock + formattedBody + '\n', stderr: '', exitCode: 0 };
+      }
+
+      return { stdout: formattedBody.endsWith('\n') ? formattedBody : formattedBody + '\n', stderr: '', exitCode: 0 };
     },
   },
   {
     name: 'wget',
-    description: 'The non-interactive network downloader',
+    description: 'The non-interactive network downloader (Enhanced with POSIX vfsd IPC & Progress Meter)',
     category: 'sys',
     execute: async (ctx) => {
-      const url = ctx.args.find((a) => a.startsWith('http://') || a.startsWith('https://')) || ctx.args[0];
-      if (!url) return { stdout: '', stderr: 'wget: missing URL\n', exitCode: 1 };
+      let rawUrl = ctx.args.find((a) => a.startsWith('http://') || a.startsWith('https://') || (a.includes('.') && !a.startsWith('-')));
+      if (!rawUrl) return { stdout: '', stderr: 'wget: missing URL\nUsage: wget [URL]\n', exitCode: 1 };
 
-      const fileName = url.split('/').pop() || 'index.html';
-      let content = `<!-- Downloaded from ${url} -->\n<h1>Earendel Download Sample</h1>\n`;
-
-      try {
-        const res = await fetch(url);
-        content = await res.text();
-      } catch (e) {
-        // Ignore CORS fallback
+      if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+        rawUrl = 'https://' + rawUrl;
       }
 
-      ctx.vfs.writeFile(fileName, content);
-      return {
-        stdout: `--${new Date().toISOString()}--  ${url}
-Resolving ${url.replace(/^https?:\/\//, '').split('/')[0]}... 104.21.48.12
-Connecting to 104.21.48.12:443... connected.
-HTTP request sent, awaiting response... 200 OK
-Length: ${content.length} [text/html]
-Saving to: '${fileName}'
+      const parsedUrl = new URL(rawUrl);
+      const host = parsedUrl.hostname;
+      const fileName = parsedUrl.pathname.split('/').filter(Boolean).pop() || 'index.html';
+      const ip = resolveHostToIp(host);
 
-'${fileName}' saved [${content.length}/${content.length}]\n`,
-        stderr: '',
-        exitCode: 0,
-      };
+      let bodyText = '';
+      let contentType = 'text/html';
+
+      try {
+        const res = await fetch(rawUrl);
+        contentType = res.headers.get('content-type') || 'text/html';
+        bodyText = await res.text();
+      } catch (e) {
+        // Fallback fetch via CORS Proxy
+        try {
+          const corsProxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(rawUrl)}`;
+          const res = await fetch(corsProxyUrl);
+          bodyText = await res.text();
+        } catch (err) {
+          bodyText = `<!DOCTYPE html>\n<html>\n<head><title>${host}</title></head>\n<body>\n<h1>Downloaded via Earendel POSIX WebOS</h1>\n<p>Source: ${rawUrl}</p>\n</body>\n</html>\n`;
+        }
+      }
+
+      // POSIX System Call SYS_WRITE -> vfsd IPC
+      await syscall(SyscallNo.SYS_WRITE, fileName, bodyText);
+
+      const sizeBytes = bodyText.length;
+      const sizeKB = (sizeBytes / 1024).toFixed(1);
+      const nowStr = new Date().toISOString().replace('T', ' ').substring(0, 19);
+
+      const out = [
+        `--${nowStr}--  ${rawUrl}`,
+        `Resolving ${host} (${host})... ${ip}`,
+        `Connecting to ${host} (${ip})|:443... connected.`,
+        `HTTP request sent, awaiting response... \x1b[1;32m200 OK\x1b[0m`,
+        `Length: ${sizeBytes} (${sizeKB}K) [${contentType}]`,
+        `Saving to: '${fileName}'`,
+        ``,
+        `${fileName.padEnd(20)} 100%[=====================================>] ${sizeKB}K  --.-KB/s    in 0.1s`,
+        ``,
+        `${nowStr} (1.2 MB/s) - '${fileName}' saved [${sizeBytes}/${sizeBytes}] (via POSIX vfsd SYS_WRITE)\n`,
+      ].join('\n');
+
+      return { stdout: out, stderr: '', exitCode: 0 };
     },
   },
   {

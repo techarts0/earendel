@@ -33,7 +33,9 @@ export class WorkerIPCBridge {
         };
       `;
       const blob = new Blob([workerCode], { type: 'application/javascript' });
-      const worker = new Worker(URL.createObjectURL(blob));
+      const blobUrl = URL.createObjectURL(blob);
+      const worker = new Worker(blobUrl);
+      URL.revokeObjectURL(blobUrl);
 
       const info: IsolatedWorkerInfo = {
         serviceName,
