@@ -1,3 +1,6 @@
+import { SyscallNo, SyscallResult } from './types';
+import { globalIPCBus } from './ipcBus';
+
 export interface SyscallTraceEntry {
   sysNo: SyscallNo;
   name: string;

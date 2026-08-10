@@ -42,6 +42,8 @@ export class Microkernel {
     const _shm = globalIPCSharedMem;
 
     this.log('kernel', 'WebWorker Process Isolation Bridge (WorkerIPCBridge) Online.', 'info');
+    this.log('driverd', 'Registering POSIX Character Devices (/dev/null, /dev/zero, /dev/urandom)...', 'info');
+    this.log('driverd', 'Registering Pseudo Terminal Slave Devices (/dev/pts/0, /dev/pts/1)...', 'info');
     this.log('kernel', 'Kernel Driver Module Manager (moduleManager) Online.', 'info');
     this.log('kernel', 'POSIX C/JS System Library (/lib/eslib.js) Loaded.', 'info');
     this.log('kernel', 'Virtual Memory 4KB Page Table & Frame Allocator (vmPageTable) Online.', 'info');

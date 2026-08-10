@@ -152,6 +152,30 @@ Swap:        2097152           0     2097152\n`,
     },
   },
   {
+    name: 'ldd',
+    description: 'Print shared object dependencies',
+    category: 'sys',
+    execute: (ctx) => {
+      const target = ctx.args[0];
+      if (!target) {
+        return { stdout: '', stderr: 'ldd: missing file arguments\nUsage: ldd FILE...\n', exitCode: 1 };
+      }
+
+      const path = target.startsWith('/') ? target : `/usr/bin/${target}`;
+      const node = ctx.vfs.getNodeByPath(path);
+      if (!node) {
+        return { stdout: '', stderr: `ldd: ${target}: No such file or directory\n`, exitCode: 1 };
+      }
+
+      let out = `\tlinux-vdso.so.1 (0x00007ffe${Math.floor(Math.random() * 0xfffffff).toString(16).padStart(8, '0')})\n`;
+      out += `\tlibc.so.6 => /lib/x86_64-linux-gnu/libc.so.6 (0x00007f8a${Math.floor(Math.random() * 0xfffffff).toString(16).padStart(8, '0')})\n`;
+      out += `\tlibm.so.6 => /lib/x86_64-linux-gnu/libm.so.6 (0x00007f8b${Math.floor(Math.random() * 0xfffffff).toString(16).padStart(8, '0')})\n`;
+      out += `\t/lib64/ld-linux-x86-64.so.2 (0x00007f8c${Math.floor(Math.random() * 0xfffffff).toString(16).padStart(8, '0')})\n`;
+
+      return { stdout: out, stderr: '', exitCode: 0 };
+    },
+  },
+  {
     name: 'date',
     description: 'Display or set system date and time',
     category: 'sys',

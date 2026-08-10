@@ -152,6 +152,12 @@ export class VirtualFileSystem {
       'root:x:0:\nhello:x:1000:hello\nsudo:x:27:hello\n'
     );
 
+    this.mkdir('/lib/x86_64-linux-gnu', true);
+    this.mkdir('/lib64', true);
+    this.writeFile('/lib/x86_64-linux-gnu/libc.so.6', '#!ELF C Standard Library (GNU libc)\n');
+    this.writeFile('/lib/x86_64-linux-gnu/libm.so.6', '#!ELF Math Shared Library\n');
+    this.writeFile('/lib64/ld-linux-x86-64.so.2', '#!ELF Dynamic Linker/Loader\n');
+
     // Sync physical binary symbols to /usr/bin/
     try {
       globalCommandRegistry.syncAllSymbolsToVFS();
@@ -327,6 +333,10 @@ export class VirtualFileSystem {
       const procNode = this.generateProcNode(absPath);
       if (procNode) return procNode;
     }
+    if (absPath.startsWith('/dev') || absPath === '/dev') {
+      const devNode = this.generateDevNode(absPath);
+      if (devNode) return devNode;
+    }
     if (absPath === '/') return this.root;
 
     const parts = absPath.split('/').filter(Boolean);
@@ -426,6 +436,7 @@ export class VirtualFileSystem {
 
   writeFile(pathStr: string, content: string, currentUser = 'hello'): boolean {
     const absPath = this.resolvePath(pathStr);
+    if (absPath === '/dev/null') return true;
 
     if (globalHostMountEngine.getMatchingMount(absPath)) {
       globalHostMountEngine.writeFile(absPath, content);
@@ -472,6 +483,13 @@ export class VirtualFileSystem {
 
   readFile(pathStr: string, currentUser = 'hello'): string | null {
     const absPath = this.resolvePath(pathStr);
+    if (absPath === '/dev/null') return '';
+    if (absPath === '/dev/zero') return '\0'.repeat(1024);
+    if (absPath === '/dev/urandom' || absPath === '/dev/random') {
+      const bytes = new Uint8Array(64);
+      if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes);
+      return Array.from(bytes).map((b) => String.fromCharCode(b)).join('');
+    }
 
     const node = this.getNodeByPath(absPath);
     if (node && node.type === 'file') {
@@ -621,6 +639,87 @@ export class VirtualFileSystem {
   }
 
   private bootTimestamp = Date.now();
+
+  private generateDevNode(absPath: string): VFSNode | null {
+    const cleanPath = absPath.replace(/\/$/, '') || '/dev';
+
+    if (cleanPath === '/dev') {
+      const childrenMap = new Map<string, VFSNode>();
+      const mkDevChild = (n: string, t: 'file' | 'directory' | 'symlink', target?: string) => {
+        childrenMap.set(n, {
+          id: `dev_${n}`,
+          name: n,
+          type: t,
+          permissions: t === 'symlink' ? 'rwxrwxrwx' : t === 'directory' ? 'r-xr-xr-x' : 'rw-rw-rw-',
+          owner: 'root',
+          group: t === 'directory' ? 'root' : 'tty',
+          size: 0,
+          updatedAt: new Date(),
+          symlinkTarget: target,
+          children: t === 'directory' ? new Map() : undefined,
+          parent: this.root,
+        });
+      };
+
+      ['null', 'zero', 'urandom', 'random', 'tty'].forEach((f) => mkDevChild(f, 'file'));
+      ['pts'].forEach((d) => mkDevChild(d, 'directory'));
+      mkDevChild('stdin', 'symlink', '/proc/self/fd/0');
+      mkDevChild('stdout', 'symlink', '/proc/self/fd/1');
+      mkDevChild('stderr', 'symlink', '/proc/self/fd/2');
+
+      return {
+        id: 'dev_root',
+        name: 'dev',
+        type: 'directory',
+        permissions: 'rwxr-xr-x',
+        owner: 'root',
+        group: 'root',
+        size: 4096,
+        updatedAt: new Date(),
+        children: childrenMap,
+        parent: this.root,
+      };
+    }
+
+    if (cleanPath === '/dev/null') {
+      return { id: 'dev_null', name: 'null', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'tty', size: 0, updatedAt: new Date(), content: '', parent: this.root };
+    }
+
+    if (cleanPath === '/dev/zero') {
+      return { id: 'dev_zero', name: 'zero', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'tty', size: 1024, updatedAt: new Date(), content: '\0'.repeat(1024), parent: this.root };
+    }
+
+    if (cleanPath === '/dev/urandom' || cleanPath === '/dev/random') {
+      const bytes = new Uint8Array(64);
+      if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes);
+      const randStr = Array.from(bytes).map((b) => String.fromCharCode(b)).join('');
+      return { id: 'dev_urandom', name: cleanPath.replace('/dev/', ''), type: 'file', permissions: 'r--r--r--', owner: 'root', group: 'tty', size: 64, updatedAt: new Date(), content: randStr, parent: this.root };
+    }
+
+    if (cleanPath === '/dev/tty') {
+      return { id: 'dev_tty', name: 'tty', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'tty', size: 0, updatedAt: new Date(), content: '', parent: this.root };
+    }
+
+    if (cleanPath === '/dev/stdin' || cleanPath === '/dev/stdout' || cleanPath === '/dev/stderr') {
+      const fd = cleanPath === '/dev/stdin' ? '0' : cleanPath === '/dev/stdout' ? '1' : '2';
+      return { id: `dev_${fd}`, name: cleanPath.replace('/dev/', ''), type: 'symlink', permissions: 'rwxrwxrwx', owner: 'root', group: 'tty', size: 16, updatedAt: new Date(), symlinkTarget: `/proc/self/fd/${fd}`, parent: this.root };
+    }
+
+    if (cleanPath === '/dev/pts') {
+      const ptsChildren = new Map<string, VFSNode>();
+      ['0', '1', 'ptmx'].forEach((p) => {
+        ptsChildren.set(p, { id: `dev_pts_${p}`, name: p, type: 'file', permissions: 'rw-rw----', owner: 'hello', group: 'tty', size: 0, updatedAt: new Date(), parent: this.root });
+      });
+      return { id: 'dev_pts', name: 'pts', type: 'directory', permissions: 'r-xr-xr-x', owner: 'root', group: 'root', size: 4096, updatedAt: new Date(), children: ptsChildren, parent: this.root };
+    }
+
+    if (cleanPath.startsWith('/dev/pts/')) {
+      const pName = cleanPath.replace('/dev/pts/', '');
+      return { id: `dev_pts_${pName}`, name: pName, type: 'file', permissions: 'rw-rw----', owner: 'hello', group: 'tty', size: 0, updatedAt: new Date(), parent: this.root };
+    }
+
+    return null;
+  }
 
   private generateProcNode(absPath: string): VFSNode | null {
     const cleanPath = absPath.replace(/\/proc\/self(\/|$)/, '/proc/100$1').replace(/\/$/, '') || '/proc';
