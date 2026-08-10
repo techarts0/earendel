@@ -1,4 +1,4 @@
-# 🌌 Earendel - Pure TypeScript Web Linux Microkernel OS
+# 🌌 Earendel - Pure TypeScript Microkernel WebOS
 
 > **A 100% browser-native, pure TypeScript POSIX-compliant microkernel operating system with zero backend dependencies, host disk mounting, and custom binary toolchain.**
 
@@ -11,7 +11,6 @@
 
 👉 **Live Demo**: [https://earendel.techarts.cn](https://earendel.techarts.cn)  
 *(Alternative Domain: [https://linux.techarts.cn](https://linux.techarts.cn) | Default Credentials: Username `hello` | Password `123456`)*  
-*(📦 GitHub: [https://github.com/techarts0/earendel](https://github.com/techarts0/earendel))*
 
 ---
 
@@ -47,7 +46,7 @@
 
 💡 Why Earendel?
 
-| Traditional VM / Wasm Emulator (QEMU / v86) | Pure Front-End UI Shells | The Earendel Microkernel Advantage |
+| Traditional VM / Wasm Emulator | Pure Front-End UI Shells | The Earendel Microkernel |
 | :--- | :--- | :--- |
 | ❌ Heavy & Slow: Takes seconds/minutes to download 100MB+ OS images | ❌ Fake OS: Just CSS/DOM dragging without actual process isolation | ⚡ Instant Boot: 0.1s startup time, ~30MB memory footprint |
 | ❌ Black Box: Hard to inspect x86 assembly & Wasm bytecode | ❌ UI Blocking: Long-running loops freeze the browser main thread | 🛡️ Thread Isolated: Web Worker kernel guarantees 60 FPS Terminal UI |
