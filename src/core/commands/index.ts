@@ -29,6 +29,7 @@ import { dmesgCommand } from './dmesgCommand';
 import { moduleCommands } from './moduleCommands';
 import { kdbCommands } from './kdbCommands';
 import { eccCommand } from './eccCommand';
+import { straceCommand } from './straceCommand';
 
 export function registerAllCommands(): void {
   const allSuites = [
@@ -61,6 +62,7 @@ export function registerAllCommands(): void {
     ...kdbCommands,
     dmesgCommand,
     eccCommand,
+    straceCommand,
   ];
 
   for (const cmd of allSuites) {

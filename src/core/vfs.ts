@@ -739,10 +739,11 @@ export class VirtualFileSystem {
       };
     }
 
-    const procMatch = cleanPath.match(/^\/proc\/(\d+)(?:\/(status|cmdline|cwd|environ))?$/);
+    const procMatch = cleanPath.match(/^\/proc\/(\d+)(?:\/(status|cmdline|cwd|environ|fd)(?:\/(\d+))?)?$/);
     if (procMatch) {
       const targetPid = parseInt(procMatch[1], 10);
       const subItem = procMatch[2];
+      const fdIdStr = procMatch[3];
       const pcb = globalTaskScheduler ? globalTaskScheduler.getProcess(targetPid) : null;
 
       const procName = pcb ? pcb.name : (targetPid === 1 ? 'init' : targetPid === 2 ? 'vfsd' : targetPid === 3 ? 'pmd' : targetPid === 4 ? 'driverd' : 'bash');
@@ -751,15 +752,17 @@ export class VirtualFileSystem {
       const procPpid = pcb ? pcb.ppid : 1;
       const vsz = pcb ? pcb.vszKB : 32000;
       const rss = pcb ? pcb.rssKB : 8000;
+      const uidVal = procUser === 'root' ? 0 : 1000;
+      const stateChar = pcb ? (pcb.state === 'RUNNING' ? 'R (running)' : pcb.state === 'BLOCKED' ? 'T (stopped)' : pcb.state === 'ZOMBIE' ? 'Z (zombie)' : 'S (sleeping)') : 'S (sleeping)';
 
       if (!subItem) {
         const pcbChildren = new Map<string, VFSNode>();
-        const mkProcChild = (n: string, t: 'file' | 'symlink') => {
+        const mkProcChild = (n: string, t: 'file' | 'directory' | 'symlink') => {
           pcbChildren.set(n, {
             id: `proc_${targetPid}_${n}`,
             name: n,
             type: t,
-            permissions: t === 'symlink' ? 'rwxrwxrwx' : 'r--r--r--',
+            permissions: t === 'symlink' ? 'rwxrwxrwx' : t === 'directory' ? 'r-xr-xr-x' : 'r--r--r--',
             owner: procUser,
             group: procUser,
             size: 64,
@@ -768,6 +771,7 @@ export class VirtualFileSystem {
           });
         };
         ['status', 'cmdline', 'environ'].forEach((f) => mkProcChild(f, 'file'));
+        ['fd'].forEach((d) => mkProcChild(d, 'directory'));
         mkProcChild('cwd', 'symlink');
 
         return {
@@ -785,7 +789,7 @@ export class VirtualFileSystem {
       }
 
       if (subItem === 'status') {
-        const content = `Name:\t${procName}\nUmask:\t0022\nState:\tS (sleeping)\nTgid:\t${targetPid}\nNgid:\t0\nPid:\t${targetPid}\nPPid:\t${procPpid}\nTracerPid:\t0\nUid:\t1000\t1000\t1000\t1000\nGid:\t1000\t1000\t1000\t1000\nFDSize:\t${pcb?.fds?.size || 64}\nGroups:\t1000\nVmSize:\t${vsz} kB\nVmRSS:\t${rss} kB\nThreads:\t1\n`;
+        const content = `Name:\t${procName}\nUmask:\t0022\nState:\t${stateChar}\nTgid:\t${targetPid}\nNgid:\t0\nPid:\t${targetPid}\nPPid:\t${procPpid}\nTracerPid:\t0\nUid:\t${uidVal}\t${uidVal}\t${uidVal}\t${uidVal}\nGid:\t${uidVal}\t${uidVal}\t${uidVal}\t${uidVal}\nFDSize:\t${pcb?.fds?.size || 64}\nGroups:\t${uidVal}\nVmSize:\t${vsz} kB\nVmRSS:\t${rss} kB\nThreads:\t1\nVoluntary_ctxt_switches:\t124\nNonvoluntary_ctxt_switches:\t12\n`;
         return {
           id: `proc_${targetPid}_status`,
           name: 'status',
@@ -829,6 +833,62 @@ export class VirtualFileSystem {
           symlinkTarget: procCwd,
           parent: this.root,
         };
+      }
+
+      if (subItem === 'fd') {
+        if (!fdIdStr) {
+          const fdChildren = new Map<string, VFSNode>();
+          const defaultFds = pcb && pcb.fds ? Array.from(pcb.fds.values()) : [
+            { fd: 0, path: '/dev/stdin', offset: 0, flags: 'r' as const },
+            { fd: 1, path: '/dev/stdout', offset: 0, flags: 'w' as const },
+            { fd: 2, path: '/dev/stderr', offset: 0, flags: 'w' as const },
+          ];
+
+          for (const fdObj of defaultFds) {
+            fdChildren.set(fdObj.fd.toString(), {
+              id: `proc_${targetPid}_fd_${fdObj.fd}`,
+              name: fdObj.fd.toString(),
+              type: 'symlink',
+              permissions: 'rwxrwxrwx',
+              owner: procUser,
+              group: procUser,
+              size: fdObj.path.length,
+              updatedAt: new Date(),
+              symlinkTarget: fdObj.path,
+              parent: this.root,
+            });
+          }
+
+          return {
+            id: `proc_${targetPid}_fd_dir`,
+            name: 'fd',
+            type: 'directory',
+            permissions: 'r-xr-xr-x',
+            owner: procUser,
+            group: procUser,
+            size: 4096,
+            updatedAt: new Date(),
+            children: fdChildren,
+            parent: this.root,
+          };
+        } else {
+          const numFd = parseInt(fdIdStr, 10);
+          const fdObj = pcb?.fds?.get(numFd);
+          const targetPath = fdObj ? fdObj.path : numFd === 0 ? '/dev/stdin' : numFd === 1 ? '/dev/stdout' : numFd === 2 ? '/dev/stderr' : '/dev/null';
+
+          return {
+            id: `proc_${targetPid}_fd_${numFd}`,
+            name: numFd.toString(),
+            type: 'symlink',
+            permissions: 'rwxrwxrwx',
+            owner: procUser,
+            group: procUser,
+            size: targetPath.length,
+            updatedAt: new Date(),
+            symlinkTarget: targetPath,
+            parent: this.root,
+          };
+        }
       }
 
       if (subItem === 'environ') {
