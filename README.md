@@ -1,65 +1,113 @@
-# 🌌 Earendel - Pure TypeScript Web Linux Terminal
+# 🌌 Earendel - Pure TypeScript Web Linux Microkernel OS
 
-> **The zero-backend, 100% browser-native Linux OS simulator built for modern computer science education, interactive labs, and tech embedding.**
+> **A 100% browser-native, pure TypeScript POSIX-compliant microkernel operating system with zero backend dependencies, host disk mounting, and custom binary toolchain.**
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue?logo=typescript)](https://www.typescriptlang.org/)
-[![React](https://img.shields.io/badge/React-18.0+-61dafb?logo=react)](https://react.dev/)
-[![Vite](https://img.shields.io/badge/Vite-5.0+-646cff?logo=vite)](https://vitejs.dev/)
+[![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(except%20xterm.js)-brightgreen)](#-architecture-highlights)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/techarts0/earendel/pulls)
 
-**Earendel** is an ultra-lightweight, zero-cost-to-host Linux terminal emulator written in pure TypeScript. Designed to solve the traditional headaches of OS labs—such as heavy VMware setups, server maintenance costs, and broken student environments—Earendel delivers a complete Linux TTY experience directly in the browser with **instant boot, 0s latency, and 100% client-side privacy.**
+**Earendel** is an ultra-lightweight, high-performance Web Operating System written in pure TypeScript. Moving away from heavy WebAssembly-based x86 emulators and superficial "UI-only" desktop shells, Earendel implements a clean, POSIX-compliant microkernel architecture with Web Worker thread isolation, structured VFS, host disk mounting, and its own `ecc` compiler toolchain directly inside the browser.
 
-👉 **Live Demo**: [http://earendel.techarts.cn](http://earendel.techarts.cn)  
-*(Default Credentials: Username `hello` | Password `123456`)*
-
----
-
-## 💡 Why Earendel? (The EdTech Pain Points Solved)
-
-| Traditional Linux Labs (VMware / AWS Cloud Shell) | The Earendel Advantage |
-| :--- | :--- |
-| ❌ High server costs ($100s/mo for backend VM clusters) | **⚡ $0 Server Cost**: Runs 100% on student's browser CPU/Memory |
-| ❌ Complex setup (VMware, BIOS virtualization errors) | **🚀 Zero Setup**: Open a URL, start learning in 3 seconds |
-| ❌ Risk of broken environments & system crashes | **🛡️ One-Click Reset**: Instant VFS snapshot rollback |
-| ❌ Privacy & Security concerns with shared servers | **🔒 Completely Isolated**: Local IndexedDB storage, zero server leakage |
+👉 **Live Demo**: [https://earendel.techarts.cn](https://earendel.techarts.cn)  
+*(Alternative Domain: [https://linux.techarts.cn](https://linux.techarts.cn) | Default Credentials: Username `hello` | Password `123456`)*  
+*(📦 GitHub: [https://github.com/techarts0/earendel](https://github.com/techarts0/earendel))*
 
 ---
 
-## 🌟 Key Features & Highlights
+## 🏛️ Architecture Highlights
 
-### 🎓 1. Built for CS & Linux Education
-- **FHS & Persistent VFS**: Fully implemented **Filesystem Hierarchy Standard** (`/bin`, `/boot`, `/dev`, `/etc`, `/home`, `/lib`, `/opt`, `/usr`, `/var`) with IndexedDB persistence and `/var/log/syslog` boot logs.
-- **Time-Machine Snapshots**: Save (`snapshot save init`) and restore/rollback state instantly in milliseconds if students mess up the environment.
-- **Native Python 3 & Node.js Runtimes**: Execute `.py` files with loops, variables, and math, or run `.js` scripts directly on browser V8 with custom `console.log` and `process.argv` handling.
+```text
++-----------------------------------------------------------------------+
+|                         Userland (Main Thread)                        |
+|   xterm.js Terminal UI  |  GPU Canvas  |  DOM / Keyboard Listener    |
++-----------------------------------------------------------------------+
+                                   |  (Zero-Copy / PostMessage IPC)
++-----------------------------------------------------------------------+
+|                      Kernel Space (Web Worker)                        |
+|  +---------------------+  +--------------------+  +----------------+  |
+|  | Process Scheduler   |  |   VFS Block Engine |  |  Syscall API   |  |
+|  | (PCB / Shared Memory)|  | (IndexedDB/Host)   |  | (`sys` / libc) |  |
+|  +---------------------+  +--------------------+  +----------------+  |
++-----------------------------------------------------------------------+
+                                   |
++-----------------------------------------------------------------------+
+|                    Hardware Simulation & Storage                      |
+|  IndexedDB Block Device  |  FileSystem Access API  |  Cloud VFS Sync  |
++-----------------------------------------------------------------------+
+```
 
-### 🐧 2. Rich CLI & Real-Time Subsystems
-- **Virtual Docker Suite**: Emulates Docker CLI (`docker ps`, `docker ps -a`, `docker images`, `docker run -it`, `docker stop`, `docker rm`).
-- **Netfilter Firewall (`ufw` & `iptables`)**: Simulate network security rules blocking dynamic `curl` or `ping` requests in real-time.
-- **`tmux` Terminal Window Multiplexer**: Split your browser screen vertically (`tmux split`) or horizontally (`tmux split-h`) into multiple independent active terminal sessions.
-- **Geek Easter Eggs**: Includes `tell <name>` (ANSI ASCII fireworks), `rm -rf /` (nuclear bomb failsafe easter egg), `sl` (steam locomotive animation), and `figlet` (3D ASCII banner font generator).
+- **100% Pure TypeScript & Zero External Dependencies**: Built strictly with native Web APIs and TypeScript. Zero heavy NPM bloat (only uses xterm.js for TTY terminal rendering).
+- **True Microkernel & Thread Isolation**: Kernel execution, process scheduling, and file I/O run on dedicated Web Worker threads, keeping the Main UI Thread running at a silky-smooth 60 FPS.
+- **POSIX System Call API**: JavaScript acts as the system's "C Language". Userland apps invoke kernel operations via a structured sys module Promise API (`sys.open`, `sys.read`, `sys.write`, `sys.fork`, `sys.execve`).
+- **Host Disk Mounting (`mount -t host`)**: Leverages Chrome's Native FileSystem Access API (`window.showDirectoryPicker`) to mount actual host machine directories directly into the virtual `/mnt` file tree.
+- **Multi-Layer VFS Engine**: Seamlessly unifies IndexedDB block device persistence, Host Local Disk directories, and Cloud VFS remote sync.
+- **Self-Contained Compiler & Binary Format**: Includes `ecc` (Earendel C/JS Compiler), compiling code into native Earendel Executable Format (`.eaf`) parsed and dispatched by the kernel.
+- **apt Package Manager Support**: Designed with a built-in package manager to pull, install, and run userland binaries dynamically from remote repos.
 
-### 🎨 3. Highly Customizable & Embeddable
-- **5 Sleek Color Themes**: Switch instantly with `theme` between `default`, `matrix`, `dracula`, `cyberpunk`, and `monokai`.
-- **Easy Web Embedding**: Packaged as an iframe or React component for LMS (Canvas, Moodle) or technical blogs.
+💡 Why Earendel?
+
+| Traditional VM / Wasm Emulator (QEMU / v86) | Pure Front-End UI Shells | The Earendel Microkernel Advantage |
+| :--- | :--- | :--- |
+| ❌ Heavy & Slow: Takes seconds/minutes to download 100MB+ OS images | ❌ Fake OS: Just CSS/DOM dragging without actual process isolation | ⚡ Instant Boot: 0.1s startup time, ~30MB memory footprint |
+| ❌ Black Box: Hard to inspect x86 assembly & Wasm bytecode | ❌ UI Blocking: Long-running loops freeze the browser main thread | 🛡️ Thread Isolated: Web Worker kernel guarantees 60 FPS Terminal UI |
+| ❌ Isolated Sandboxes: Cannot directly read/write local host files | ❌ No Syscall Model: Lacks structured kernel system calls | 📂 Native Disk Access: Direct `mount -t host` Host FS integration |
+| ❌ High Hosting Cost: Requires expensive backend VM orchestration | ❌ Superficial: Limited to basic string parser logic | 🎓 White-Box CS Learning: Inspect every Syscall in real-time (`strace`) |
+
+---
+
+## 🌟 Key Features
+
+### 1. Real Hardware & Local Storage Integration
+- **Host FS Mounting**: Run `mount -t host` under HTTPS to select and bridge a real folder on your Mac/PC directly into `/mnt/host`.
+- **Hybrid VFS**: Filesystem Hierarchy Standard (FHS) featuring `/bin`, `/boot`, `/dev`, `/etc`, `/home`, `/lib`, `/mnt`, `/opt`, `/usr`, `/var`.
+- **Time-Machine Snapshots**: Save (`snapshot save init`) and restore state in milliseconds with zero server delay.
+
+### 2. Multi-Language Execution & Native Toolchains
+- **Shell, Python 3, & JS Interpreters**: Run Python scripts, Shell pipelines, or native JS binaries.
+- **ecc Compiler & .eaf Executables**: Compile userland code to Earendel Native Executable files and execute them seamlessly.
+- **Syscall SDK (`earendel/sys`)**: Program custom userland applications targeting POSIX-like kernel APIs.
+
+### 3. Full CLI & Real-Time System Tools
+- **Subsystem Emulation**: Emulates Docker CLI (`docker ps`, `docker run`), Netfilter Firewall (`ufw`, `iptables`), and Process Utilities (`ps`, `top`, `htop`, `kill`).
+- **tmux Terminal Multiplexer**: Split terminal views vertically (`tmux split`) or horizontally (`tmux split-h`) into active concurrent sessions.
+- **Geek Culture**: Easter eggs including ASCII fireworks (`tell`), train animations (`sl`), 3D ASCII banners (`figlet`), and nuclear failsafes (`rm -rf /`).
 
 ---
 
 ## 🚀 Quick Start
 
-### For Developers
+### Local Development Setup
 
+```bash
+# Clone the repository
 git clone https://github.com/techarts0/earendel.git
+
+# Navigate to project directory
 cd earendel
+
+# Install dependencies (Minimal setup)
 npm install
+
+# Launch Vite dev server
 npm run dev
+```
 
-Open your browser and visit `http://localhost:3000`. Login with username `hello` and password `123456`!
+Open your browser and visit `https://localhost:3000` or `http://localhost:3000`. Log in with username `hello` and password `123456`.
 
-### For Educators & Bloggers (Embed in 1 Minute)
-Simply embed Earendel into your online course, documentation, or blog via Iframe:
+### Embedding in Web Apps / LMS
 
-<iframe src="https://earendel.techarts.cn" width="100%" height="600px" frameborder="0"></iframe>
+Earendel requires zero backend servers and can be embedded as a 100% client-side interactive lab iframe:
+
+```html
+<iframe 
+  src="https://earendel.techarts.cn" 
+  width="100%" 
+  height="600px" 
+  frameborder="0" 
+  allow="clipboard-read; clipboard-write">
+</iframe>
+```
 
 ---
 
@@ -67,35 +115,27 @@ Simply embed Earendel into your online course, documentation, or blog via Iframe
 
 | Category | Commands |
 | :--- | :--- |
-| **File Management** | `ls`, `pwd`, `cd`, `cat`, `touch`, `mkdir`, `rm`, `cp`, `mv`, `head`, `tail`, `wc`, `find`, `which`, `whereis`, `locate`, `mount`, `umount`, `xclip` |
+| **File Management** | `ls`, `pwd`, `cd`, `cat`, `touch`, `mkdir`, `rm`, `cp`, `mv`, `head`, `tail`, `wc`, `find`, `which`, `whereis`, `mount`, `umount`, `xclip` |
 | **Permissions & Users** | `chmod`, `chown`, `whoami`, `who`, `id`, `useradd`, `userdel`, `su`, `sudo`, `login`, `umask` |
-| **Interpreters & Compiler** | `python3` (or `python`), `node` (or `js`), `ecc` (EAF Binary Compiler) |
+| **Interpreters & Compiler** | `python3` (or `python`), `node` (or `js`), `ecc` (EAF Binary Compiler), `apt` (Package Manager) |
 | **Text Editors** | `vi` (or `vim`), `nano` |
 | **Networking & Security** | `ping`, `curl`, `ufw`, `iptables`, `tcpdump`, `traceroute` |
-| **Container & Process** | `docker`, `ps`, `top`, `htop`, `worker`, `kill`, `systemctl`, `apt`, `df`, `free`, `uptime`, `time`, `crontab`, `dmesg`, `lsmod`, `modprobe`, `rmmod`, `vmap`, `ipcs`, `kdb` |
-| **Multiplexer & Snapshot**| `tmux`, `snapshot` (`backup`, `restore`), `display`, `fbset`, `fbclear` |
+| **Process & Kernel** | `ps`, `top`, `htop`, `worker`, `kill`, `systemctl`, `df`, `free`, `uptime`, `time`, `crontab`, `dmesg`, `lsmod`, `modprobe`, `vmap`, `ipcs` |
+| **Containers & Multiplexer** | `docker`, `tmux`, `snapshot` (backup, restore), `display`, `fbset`, `fbclear` |
 | **Geek & Customization** | `theme`, `sound`, `man`, `alias`, `unalias`, `cheat`, `tell`, `sl`, `figlet` |
 
 ---
 
-## 🏢 Enterprise & Commercial Use (EdTech / B2B)
+## 🎓 CS Education & Commercial Integration
 
-Looking to integrate Earendel into your university, bootcamp, or commercial learning platform?
+Earendel is built to serve as an ideal environment for:
 
-- **Custom Interactive Courses**: Pre-define files, labs, and interactive step-by-step terminal challenges.
-- **LMS Integration**: Webhook/API hookups for automated assignment grading and submission.
-- **White-Labeling**: Custom branding, default themes, and pre-installed toolchains.
-
-📩 **Contact for Institutional Support**: Open a [GitHub Discussion](https://github.com/techarts0/earendel/discussions) or reach out directly.
+- **Operating System (OS) Courses**: Demonstrating processes, scheduling, virtual filesystems, and Syscall mechanisms without setting up complex C/GCC cross-compilers or heavy VMs.
+- **Interactive EdTech Labs**: Embedding instant, zero-cost, crash-proof Linux lab terminals into online tutorials, coding bootcamps, or LMS platforms.
+- **Browser-Native Utilities**: Building local-first Web IDEs, log inspectors, or terminal-based developer tools.
 
 ---
 
 ## 📜 License
 
-Distributed under the **MIT License**. Free for personal, educational, and commercial use.
-
----
-
-<p align="center">
-  <i>Crafted with ❤️ for students, terminal lovers, and geek culture enthusiasts worldwide.</i>
-</p>
+Distributed under the MIT License. Free for personal, educational, and commercial use.
