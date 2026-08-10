@@ -577,6 +577,70 @@ class PkgManager {
 
     return { success: true, log: upgradeLog.join('\n') };
   }
+
+  public rehydrateInstalledFromVFS(): void {
+    const infoDirNode = globalVFS.getNodeByPath('/var/lib/dpkg/info');
+    if (!infoDirNode || !infoDirNode.children) return;
+
+    for (const [filename, fileNode] of infoDirNode.children.entries()) {
+      if (filename.endsWith('.info')) {
+        const pkgName = filename.replace(/\.info$/, '');
+        const content = fileNode.content;
+        if (content) {
+          try {
+            const meta = JSON.parse(content);
+            const existing = this.repo.get(pkgName);
+            if (existing) {
+              existing.installed = true;
+              existing.version = meta.version || existing.version;
+              existing.executables.forEach((cmd) => {
+                globalCommandRegistry.register(cmd);
+              });
+            } else {
+              const executables: Command[] = (meta.executables || [{ name: pkgName }]).map((exec: any) => ({
+                name: exec.name || pkgName,
+                description: exec.description || meta.description || '',
+                category: exec.category || 'sys',
+                execute: (ctx: ExecutionContext) => {
+                  const payloadFilePath = `/usr/lib/${pkgName}/bundle.json`;
+                  const rawPayloadStr = ctx.vfs.readFile(payloadFilePath);
+                  if (!rawPayloadStr) {
+                    return { stdout: '', stderr: `bash: /usr/bin/${exec.name}: Executable payload not found\n`, exitCode: 127 };
+                  }
+                  try {
+                    const bundleMeta = JSON.parse(rawPayloadStr);
+                    if (bundleMeta.type === 'wasm') {
+                      const bytes = bundleMeta.wasmBytes ? new Uint8Array(bundleMeta.wasmBytes) : globalWasmEngine.getDemoWasmBytecode();
+                      return globalWasmEngine.executeWasm(bytes, ctx);
+                    } else {
+                      const codeStr = bundleMeta.code || `return { stdout: "Running ${exec.name}\\n", stderr: "", exitCode: 0 };`;
+                      return globalJsEngine.executeJsBundle(codeStr, ctx);
+                    }
+                  } catch (err: any) {
+                    return { stdout: '', stderr: `[Runtime Error]: ${err.message}\n`, exitCode: 1 };
+                  }
+                },
+              }));
+
+              const pkg: PackageMeta = {
+                name: pkgName,
+                version: meta.version || '1.0.0',
+                type: meta.type || 'js',
+                sizeKb: meta.sizeKb || 100,
+                description: meta.description || '',
+                installed: true,
+                executables,
+              };
+
+              this.repo.set(pkgName, pkg);
+              executables.forEach((cmd) => globalCommandRegistry.register(cmd));
+            }
+          } catch (e) { }
+        }
+      }
+    }
+    this.syncDpkgStatus();
+  }
 }
 
 export const globalPkgManager = new PkgManager();

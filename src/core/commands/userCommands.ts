@@ -15,14 +15,10 @@ export const userCommands: Command[] = [
         return { stdout: '', stderr: 'chown: missing operand\nUsage: chown [-R] OWNER[:GROUP] FILE\n', exitCode: 1 };
       }
 
-      const node = ctx.vfs.getNodeByPath(file);
-      if (!node) {
+      const ok = ctx.vfs.chown(file, owner, recursive);
+      if (!ok) {
         return { stdout: '', stderr: `chown: cannot access '${file}': No such file or directory\n`, exitCode: 1 };
       }
-
-      const parts = owner.split(':');
-      node.owner = parts[0];
-      if (parts[1]) node.group = parts[1];
 
       return { stdout: '', stderr: '', exitCode: 0 };
     },

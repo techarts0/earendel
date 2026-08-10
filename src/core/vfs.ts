@@ -193,8 +193,8 @@ export class VirtualFileSystem {
           for (const sNode of storedNodes) {
             if (sNode.path === '/' || sNode.path === '/home/hello') continue;
 
-            const existing = this.getNodeByPath(sNode.path);
-            if (!existing) {
+            let node = this.getNodeByPath(sNode.path);
+            if (!node) {
               if (sNode.type === 'directory') {
                 this.mkdir(sNode.path, true);
               } else if (sNode.type === 'symlink') {
@@ -202,18 +202,28 @@ export class VirtualFileSystem {
               } else {
                 this.writeFile(sNode.path, sNode.content ?? '');
               }
-              const node = this.getNodeByPath(sNode.path);
-              if (node) {
-                node.type = sNode.type;
-                node.permissions = (sNode.path.startsWith('/bin/') || sNode.path.startsWith('/usr/bin/')) ? 'rwxr-xr-x' : sNode.permissions;
-                node.owner = sNode.owner;
-                node.group = sNode.group;
-                if (sNode.symlinkTarget) node.symlinkTarget = sNode.symlinkTarget;
+              node = this.getNodeByPath(sNode.path);
+            }
+
+            if (node) {
+              node.type = sNode.type;
+              node.permissions = (sNode.path.startsWith('/bin/') || sNode.path.startsWith('/usr/bin/')) ? 'rwxr-xr-x' : sNode.permissions;
+              node.owner = sNode.owner;
+              node.group = sNode.group;
+              if (sNode.content !== undefined && node.type === 'file') {
+                node.content = sNode.content;
+                node.size = new TextEncoder().encode(sNode.content).length;
               }
+              if (sNode.symlinkTarget) node.symlinkTarget = sNode.symlinkTarget;
             }
           }
           this.notify();
           globalCommandRegistry.syncAllSymbolsToVFS();
+
+          // Dynamically rehydrate installed package executables from restored /var/lib/dpkg/info/
+          import('./pkgManager').then(({ globalPkgManager }) => {
+            globalPkgManager.rehydrateInstalledFromVFS();
+          });
         }
       };
     } catch (err) {
