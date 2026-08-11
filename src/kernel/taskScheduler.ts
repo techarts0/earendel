@@ -1,11 +1,44 @@
-// Earendel Microkernel PCB Task & Process Scheduler
 import { ProcessControlBlock, TaskState } from './types';
+
+export type SchedPolicy = 'CFS' | 'RR' | 'FIFO' | 'PRIORITY';
+
+export interface SchedStatEntry {
+  pid: number;
+  name: string;
+  policy: SchedPolicy;
+  prio: number;
+  cpuTimeSec: number;
+  switches: number;
+}
 
 export class TaskScheduler {
   private pcbTable: Map<number, ProcessControlBlock> = new Map();
+  private currentPolicy: SchedPolicy = 'CFS';
+  private timeQuantumMs: number = 50;
+  private processSwitches: Map<number, number> = new Map();
 
   constructor() {
     this.initKernelProcess();
+  }
+
+  public getPolicy(): SchedPolicy {
+    return this.currentPolicy;
+  }
+
+  public setPolicy(p: SchedPolicy): void {
+    this.currentPolicy = p;
+  }
+
+  public getSchedStats(): SchedStatEntry[] {
+    const processes = this.getAllProcesses();
+    return processes.map((p) => ({
+      pid: p.pid,
+      name: p.name,
+      policy: this.currentPolicy,
+      prio: p.pid === 1 ? 99 : 20,
+      cpuTimeSec: parseFloat((0.01 + Math.random() * 0.08).toFixed(2)),
+      switches: (this.processSwitches.get(p.pid) || 4) + Math.floor(Math.random() * 3),
+    }));
   }
 
   private initKernelProcess() {
@@ -39,6 +72,7 @@ export class TaskScheduler {
       ]);
     }
     this.pcbTable.set(pcb.pid, pcb);
+    this.processSwitches.set(pcb.pid, 1);
     return pcb;
   }
 

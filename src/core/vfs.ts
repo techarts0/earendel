@@ -943,7 +943,7 @@ export class VirtualFileSystem {
             { fd: 2, path: '/dev/stderr', offset: 0, flags: 'w' as const },
           ];
 
-          for (const fdObj of defaultFds) {
+          for (const fdObj of defaultFds as any[]) {
             fdChildren.set(fdObj.fd.toString(), {
               id: `proc_${targetPid}_fd_${fdObj.fd}`,
               name: fdObj.fd.toString(),

@@ -30,6 +30,10 @@ import { moduleCommands } from './moduleCommands';
 import { kdbCommands } from './kdbCommands';
 import { eccCommand } from './eccCommand';
 import { straceCommand } from './straceCommand';
+import { namespaceCommands } from './namespaceCommands';
+import { capCommands } from './capCommands';
+import { ipcTraceCommand } from './ipcTraceCommand';
+import { kconfigCommands } from './kconfigCommands';
 
 export function registerAllCommands(): void {
   const allSuites = [
@@ -60,6 +64,10 @@ export function registerAllCommands(): void {
     ...graphicsCommands,
     ...moduleCommands,
     ...kdbCommands,
+    ...namespaceCommands,
+    ...capCommands,
+    ipcTraceCommand,
+    ...kconfigCommands,
     dmesgCommand,
     eccCommand,
     straceCommand,
