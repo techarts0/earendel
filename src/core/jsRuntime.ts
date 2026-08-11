@@ -51,6 +51,18 @@ export class JsRuntimeEngine {
         runnerCode
       );
 
+      let embeddedAssets: Record<string, string> = {};
+      const scriptPath = ctx.args[0] || '';
+      if (scriptPath.endsWith('.eaf')) {
+        const rawEaf = ctx.vfs.readFile(scriptPath) || '';
+        try {
+          const eafObj = JSON.parse(rawEaf);
+          if (eafObj.sections?.['.data']?.embeds) {
+            embeddedAssets = eafObj.sections['.data'].embeds;
+          }
+        } catch (_) {}
+      }
+
       const eslibObj = {
         sys: {
           read: (path: string) => syscall(SyscallNo.SYS_READ, path),
@@ -59,6 +71,8 @@ export class JsRuntimeEngine {
           execve: (path: string, args: string[]) => syscall(SyscallNo.SYS_EXECVE, path, args),
           exit: (code: number) => syscall(SyscallNo.SYS_EXIT, code),
           getpid: () => syscall(SyscallNo.SYS_GETPID),
+          getEmbed: (filename: string) => embeddedAssets[filename] ?? null,
+          readEmbed: (filename: string) => embeddedAssets[filename] ?? null,
         },
         io: {
           printf: (fmt: any, ...args: any[]) => {
@@ -85,20 +99,23 @@ export class JsRuntimeEngine {
 
       if (res && typeof res === 'object') {
         await syscall(SyscallNo.SYS_EXIT, childPid);
+        const finalStdout = res.stdout || stdoutBuffer;
+        const debugDump = finalStdout.trim() ? finalStdout : `\x1b[33m[jsRuntime Debug]: Bundle executed (exitCode: 0), but no stdout was generated.\x1b[0m\n\x1b[90mExecuted Code:\n${cleanCodeStr}\x1b[0m\n`;
         return {
-          stdout: (res.stdout || stdoutBuffer) + (res.stdout ? '' : ''),
+          stdout: debugDump,
           stderr: res.stderr || stderrBuffer,
           exitCode: typeof res.exitCode === 'number' ? res.exitCode : 0,
         };
       }
 
       await syscall(SyscallNo.SYS_EXIT, childPid);
-      return { stdout: stdoutBuffer, stderr: stderrBuffer, exitCode: 0 };
+      const debugDump = stdoutBuffer.trim() ? stdoutBuffer : `\x1b[33m[jsRuntime Debug]: Bundle executed (exitCode: 0), but no stdout was generated.\x1b[0m\n\x1b[90mExecuted Code:\n${cleanCodeStr}\x1b[0m\n`;
+      return { stdout: debugDump, stderr: stderrBuffer, exitCode: 0 };
     } catch (e: any) {
       await syscall(SyscallNo.SYS_EXIT, childPid);
       return {
         stdout: stdoutBuffer,
-        stderr: `\x1b[31m[JS Runtime Exception]: ${e.message}\x1b[0m\n${stderrBuffer}`,
+        stderr: `\x1b[31m[JS Runtime Exception]: ${e.message}\x1b[0m\n\x1b[90mSource Executed:\n${cleanCodeStr}\x1b[0m\n${stderrBuffer}`,
         exitCode: 1,
       };
     }

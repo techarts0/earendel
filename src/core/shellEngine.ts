@@ -446,7 +446,7 @@ export class ShellEngine {
                 vfs: globalVFS,
                 env: childEnv,
                 lang: this.lang,
-                args: cmdArgs,
+                args: [scriptPath, ...cmdArgs],
                 pipeInput,
                 processManager: globalProcessManager,
               };
