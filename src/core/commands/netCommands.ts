@@ -26,15 +26,66 @@ export function resolveHostToIp(host: string): string {
   return host; // Return as-is if unmapped
 }
 
+let cachedClientIpInfo: { publicIp: string; localIp: string } | null = null;
+
+export async function getRealClientNetworkInfo(): Promise<{ publicIp: string; localIp: string }> {
+  if (cachedClientIpInfo) return cachedClientIpInfo;
+
+  let publicIp = '127.0.0.1';
+  let localIp = '192.168.1.100';
+
+  try {
+    const res = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(3000) });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.ip) publicIp = data.ip;
+    }
+  } catch (e) {
+    try {
+      const fallback = await fetch('https://api.myip.com', { signal: AbortSignal.timeout(2000) });
+      if (fallback.ok) {
+        const d = await fallback.json();
+        if (d.ip) publicIp = d.ip;
+      }
+    } catch (err) {}
+  }
+
+  cachedClientIpInfo = { publicIp, localIp };
+  return cachedClientIpInfo;
+}
+
+export async function queryDoHDns(domain: string): Promise<string[]> {
+  if (domain === 'localhost' || domain === '127.0.0.1') return ['127.0.0.1'];
+  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(domain)) return [domain];
+
+  try {
+    const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=A`, {
+      headers: { accept: 'application/dns-json' },
+      signal: AbortSignal.timeout(3000),
+    });
+    if (res.ok) {
+      const json = await res.json();
+      if (json.Answer && Array.isArray(json.Answer)) {
+        const ips = json.Answer.filter((a: any) => a.type === 1).map((a: any) => a.data);
+        if (ips.length > 0) return ips;
+      }
+    }
+  } catch (e) {}
+
+  const mapped = resolveHostToIp(domain);
+  return [mapped !== domain ? mapped : '93.184.216.34'];
+}
+
 export const netCommands: Command[] = [
   {
     name: 'ifconfig',
     description: 'configure a network interface',
     category: 'net',
-    execute: () => {
+    execute: async () => {
+      const ipInfo = await getRealClientNetworkInfo();
       const output = [
         'eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500',
-        '        inet 192.168.1.100  netmask 255.255.255.0  broadcast 192.168.1.255',
+        `        inet ${ipInfo.publicIp}  netmask 255.255.255.0  broadcast 192.168.1.255`,
         '        inet6 fe80::5054:ff:fe12:3456  prefixlen 64  scopeid 0x20<link>',
         '        ether 52:54:00:12:34:56  txqueuelen 1000  (Ethernet)',
         '        RX packets 14205  bytes 18290451 (18.2 MB)',
@@ -56,9 +107,10 @@ export const netCommands: Command[] = [
     name: 'ip',
     description: 'show / manipulate routing, network devices, interfaces and tunnels',
     category: 'net',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       const sub = ctx.args[0] || 'a';
       if (sub === 'a' || sub === 'addr' || sub === 'address') {
+        const ipInfo = await getRealClientNetworkInfo();
         const output = [
           '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000',
           '    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00',
@@ -68,7 +120,7 @@ export const netCommands: Command[] = [
           '       valid_lft forever preferred_lft forever',
           '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000',
           '    link/ether 52:54:00:12:34:56 brd ff:ff:ff:ff:ff:ff',
-          '    inet 192.168.1.100/24 brd 192.168.1.255 scope global eth0',
+          `    inet ${ipInfo.publicIp}/24 brd 192.168.1.255 scope global eth0`,
           '       valid_lft forever preferred_lft forever',
           '    inet6 fe80::5054:ff:fe12:3456/64 scope link',
           '       valid_lft forever preferred_lft forever',
@@ -102,25 +154,20 @@ export const netCommands: Command[] = [
     name: 'nslookup',
     description: 'query Internet name servers interactively',
     category: 'net',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       const domain = ctx.args[0];
       if (!domain) {
         return { stdout: '', stderr: 'nslookup: missing domain name\n', exitCode: 1 };
       }
 
-      const ip = resolveHostToIp(domain);
-      const isMapped = ip !== domain;
+      const ips = await queryDoHDns(domain);
 
-      const output = [
-        'Server:\t\t127.0.0.53',
-        'Address:\t127.0.0.53#53',
-        '',
-        'Non-authoritative answer:',
-        `Name:\t${domain}`,
-        `Address: ${isMapped ? ip : '93.184.216.34'}`,
-      ].join('\n');
+      let output = `Server:\t\t1.1.1.1\nAddress:\t1.1.1.1#53\n\nNon-authoritative answer:\nName:\t${domain}\n`;
+      ips.forEach((ip) => {
+        output += `Address: ${ip}\n`;
+      });
 
-      return { stdout: output + '\n', stderr: '', exitCode: 0 };
+      return { stdout: output, stderr: '', exitCode: 0 };
     },
   },
   {

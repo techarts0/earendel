@@ -1,5 +1,5 @@
 import { Command } from '../types';
-import { resolveHostToIp } from './netCommands';
+import { resolveHostToIp, queryDoHDns } from './netCommands';
 import { globalFirewallEngine } from '../firewallEngine';
 import { syscall } from '../../kernel/syscall';
 import { SyscallNo } from '../../kernel/types';
@@ -11,19 +11,33 @@ export const netArchiveCommands: Command[] = [
     category: 'sys',
     execute: async (ctx) => {
       const target = ctx.args.find((a) => !a.startsWith('-')) || '8.8.8.8';
-      const ip = resolveHostToIp(target);
+      const resolvedIps = await queryDoHDns(target);
+      const ip = resolvedIps[0] || '8.8.8.8';
 
       if (!globalFirewallEngine.isPortAllowed(80, 'tcp')) {
         return { stdout: '', stderr: `ping: connect: Network is unreachable (Blocked by Firewall rules)\n`, exitCode: 2 };
       }
 
       let out = `PING ${target} (${ip}) 56(84) bytes of data.\n`;
+      const times: number[] = [];
+
       for (let i = 1; i <= 4; i++) {
-        const time = (12 + Math.random() * 8).toFixed(1);
-        out += `64 bytes from ${ip}: icmp_seq=${i} ttl=117 time=${time} ms\n`;
-        await new Promise((r) => setTimeout(r, 600)); // Real-time 0.6s echo pulse
+        const start = performance.now();
+        try {
+          const url = target.startsWith('http') ? target : `https://${target}`;
+          await fetch(url, { method: 'HEAD', mode: 'no-cors', cache: 'no-cache', signal: AbortSignal.timeout(2000) });
+        } catch (e) {}
+        const elapsed = parseFloat((performance.now() - start).toFixed(1));
+        times.push(elapsed > 0 ? elapsed : 14.2);
+        out += `64 bytes from ${ip}: icmp_seq=${i} ttl=117 time=${times[times.length - 1]} ms\n`;
+        await new Promise((r) => setTimeout(r, 200));
       }
-      out += `\n--- ${target} ping statistics ---\n4 packets transmitted, 4 received, 0% packet loss, time 2400ms\nrtt min/avg/max/mdev = 12.1/15.4/19.8/2.1 ms\n`;
+
+      const min = Math.min(...times).toFixed(1);
+      const max = Math.max(...times).toFixed(1);
+      const avg = (times.reduce((a, b) => a + b, 0) / times.length).toFixed(1);
+
+      out += `\n--- ${target} ping statistics ---\n4 packets transmitted, 4 received, 0% packet loss, time 800ms\nrtt min/avg/max/mdev = ${min}/${avg}/${max}/2.1 ms\n`;
       return { stdout: out, stderr: '', exitCode: 0 };
     },
   },
