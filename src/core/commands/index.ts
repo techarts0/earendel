@@ -34,6 +34,7 @@ import { namespaceCommands } from './namespaceCommands';
 import { capCommands } from './capCommands';
 import { ipcTraceCommand } from './ipcTraceCommand';
 import { kconfigCommands } from './kconfigCommands';
+import { agentListCommand, agentStartCommand, agentStopCommand, agentTestCommand } from './agentCommands';
 
 export function registerAllCommands(): void {
   const allSuites = [
@@ -68,6 +69,10 @@ export function registerAllCommands(): void {
     ...capCommands,
     ipcTraceCommand,
     ...kconfigCommands,
+    agentListCommand,
+    agentStartCommand,
+    agentStopCommand,
+    agentTestCommand,
     dmesgCommand,
     eccCommand,
     straceCommand,

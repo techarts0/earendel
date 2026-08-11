@@ -8,7 +8,8 @@ import { globalWorkerIPCBridge } from './workerIPCBridge';
 import { globalModuleManager } from './moduleManager';
 import { globalVMPageTable } from './vmPageTable';
 import { globalIPCSharedMem } from './ipcSharedMem';
-import { initESLibSystemFile } from './services/eslib';
+import { globalKAgentDaemon } from './services/kagentd';
+import { globalCapAgentDaemon } from './services/capAgentd';
 
 export interface KernelDmesgLog {
   timestamp: string;
@@ -31,11 +32,15 @@ export class Microkernel {
     this.log('kernel', 'Registering User-space VFS Daemon (vfsd, PID 2)...', 'info');
     this.log('kernel', 'Registering User-space Process Manager Daemon (pmd, PID 3)...', 'info');
     this.log('kernel', 'Registering User-space Device Driver Daemon (driverd, PID 4)...', 'info');
+    this.log('kernel', 'Registering Kernel Crash Self-Healing Daemon (kagentd, PID 5)...', 'info');
+    this.log('kernel', 'Registering Kernel AI Capability Intent Firewall (capAgentd, PID 6)...', 'info');
 
     // Ensure Daemons and Bridges are initialized
     const _vfs = globalVFSDaemon;
     const _pm = globalPMDaemon;
     const _driver = globalDriverDaemon;
+    const _kagent = globalKAgentDaemon;
+    const _capagent = globalCapAgentDaemon;
     const _bridge = globalWorkerIPCBridge;
     const _mod = globalModuleManager;
     const _vm = globalVMPageTable;
