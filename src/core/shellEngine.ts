@@ -402,6 +402,14 @@ export class ShellEngine {
 
     let res: ExecutionResult = { stdout: '', stderr: '', exitCode: 0 };
 
+    // Intercept /dev/ai AI-Native pipeline command
+    if (cmdName === '/dev/ai' || cmdName === 'ai') {
+      const prompt = pipeInput || cmdArgs.join(' ') || 'Status check';
+      const { globalIPCBus } = await import('../kernel/ipcBus');
+      const aiRes = await globalIPCBus.sendIPC(24, 'driverd', 'DEV_WRITE_AI', { prompt });
+      return { stdout: (aiRes.response || aiRes.data || '') + '\n', stderr: '', exitCode: 0 };
+    }
+
     // Native script / EAF binary executable path execution via POSIX fork() -> execve() -> waitpid()
     if (cmdName.startsWith('./') || cmdName.startsWith('/') || cmdName.endsWith('.sh') || cmdName.endsWith('.eaf')) {
       const scriptPath = cmdName;

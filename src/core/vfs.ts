@@ -677,7 +677,7 @@ export class VirtualFileSystem {
         });
       };
 
-      ['null', 'zero', 'urandom', 'random', 'tty'].forEach((f) => mkDevChild(f, 'file'));
+      ['null', 'zero', 'urandom', 'random', 'tty', 'ai'].forEach((f) => mkDevChild(f, 'file'));
       ['pts'].forEach((d) => mkDevChild(d, 'directory'));
       mkDevChild('stdin', 'symlink', '/proc/self/fd/0');
       mkDevChild('stdout', 'symlink', '/proc/self/fd/1');
@@ -699,6 +699,11 @@ export class VirtualFileSystem {
 
     if (cleanPath === '/dev/null') {
       return { id: 'dev_null', name: 'null', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'tty', size: 0, updatedAt: new Date(), content: '', parent: this.root };
+    }
+
+    if (cleanPath === '/dev/ai') {
+      const aiContent = this.root?.children?.get('dev')?.children?.get('ai')?.content || '[Earendel AI Character Device Driver (/dev/ai)]\nStatus: ONLINE (Device Major 10, Minor 250)\nUsage: echo "prompt" > /dev/ai OR cat syslog | /dev/ai\n';
+      return { id: 'dev_ai', name: 'ai', type: 'file', permissions: 'rwxrwxrwx', owner: 'root', group: 'tty', size: aiContent.length, updatedAt: new Date(), content: aiContent, parent: this.root };
     }
 
     if (cleanPath === '/dev/zero') {

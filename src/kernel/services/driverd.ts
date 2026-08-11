@@ -67,20 +67,26 @@ export class DriverDaemonService {
 
         const llmConfig = this.parseLLMConfig();
         const apiKey = llmConfig['API_KEY'] || '';
-        const isRealConfigured = apiKey && !apiKey.startsWith('sk-your-api-key') && apiKey !== 'sk-xxxxxx';
+        const baseUrl = (llmConfig['BASE_URL'] || 'https://api.openai.com/v1').replace(/\/+$/, '');
+        const modelName = llmConfig['MODEL_NAME'] || 'gpt-4o-mini';
+        const enableMock = (llmConfig['ENABLE_LOCAL_MOCK'] || 'auto').toLowerCase();
 
-        if (isRealConfigured) {
+        // If user explicitly enabled mock, use offline engine; otherwise attempt HTTP fetch to BASE_URL
+        const shouldAttemptFetch = enableMock !== 'true' && Boolean(baseUrl);
+
+        if (shouldAttemptFetch) {
           try {
-            const baseUrl = (llmConfig['BASE_URL'] || 'https://api.openai.com/v1').replace(/\/+$/, '');
-            const modelName = llmConfig['MODEL_NAME'] || 'gpt-4o-mini';
             const endpoint = `${baseUrl}/chat/completions`;
+            const headers: Record<string, string> = {
+              'Content-Type': 'application/json',
+            };
+            if (apiKey && !apiKey.startsWith('sk-your-api-key') && apiKey !== 'sk-xxxxxx') {
+              headers['Authorization'] = `Bearer ${apiKey}`;
+            }
 
             const httpRes = await fetch(endpoint, {
               method: 'POST',
-              headers: {
-                'Content-Type': 'application/json',
-                'Authorization': `Bearer ${apiKey}`,
-              },
+              headers,
               body: JSON.stringify({
                 model: modelName,
                 messages: [
@@ -91,17 +97,29 @@ export class DriverDaemonService {
               }),
             });
 
-            const json = await httpRes.json();
-            const aiText = json?.choices?.[0]?.message?.content || json?.error?.message || 'No response from LLM API.';
+            const json = await httpRes.json().catch(() => ({}));
+            let aiText = '';
+            if (!httpRes.ok) {
+              const errMsg = json?.error?.message || json?.error || json?.message || httpRes.statusText;
+              aiText = `\x1b[31m[LLM API HTTP ${httpRes.status} Error]\x1b[0m ${errMsg}`;
+            } else {
+              aiText = json?.choices?.[0]?.message?.content || 'No response text content returned.';
+            }
 
             let response = `\x1b[1;36m[Earendel AI-Native OS Core (Model: ${modelName})]\x1b[0m\n${aiText}\n`;
             this.aiBuffer = response;
             return { response, data: response, success: true };
-          } catch (_) {}
+          } catch (err: any) {
+            let response = `\x1b[1;36m[Earendel AI-Native OS Core (Model: ${modelName})]\x1b[0m\n`;
+            response += `\x1b[31m[LLM Network Connection Failure]\x1b[0m Failed to connect to ${baseUrl}: ${err.message}\n`;
+            this.aiBuffer = response;
+            return { response, data: response, success: true };
+          }
         }
 
-        // Native System Fallback Engine
+        // Native System Fallback Engine (Default Offline Mode)
         let response = `\x1b[1;36m[Earendel AI-Native OS Core Inference Engine (Syscall #25)]\x1b[0m\n`;
+        response += `\x1b[33m[Notice: /etc/llm.conf API_KEY is default. Using Native Offline Engine]\x1b[0m\n`;
         response += `\x1b[90mTarget Input Payload (${cleanPrompt.length} bytes):\x1b[0m "${cleanPrompt.length > 60 ? cleanPrompt.slice(0, 60) + '...' : cleanPrompt}"\n\n`;
 
         if (cleanPrompt.includes('/etc/passwd') || cleanPrompt.includes('root:x:0:0')) {
