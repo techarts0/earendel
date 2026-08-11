@@ -402,12 +402,31 @@ export class ShellEngine {
 
     let res: ExecutionResult = { stdout: '', stderr: '', exitCode: 0 };
 
-    // Intercept /dev/ai AI-Native pipeline command
+    // Intercept /dev device pipeline commands
     if (cmdName === '/dev/ai' || cmdName === 'ai') {
       const prompt = pipeInput || cmdArgs.join(' ') || 'Status check';
       const { globalIPCBus } = await import('../kernel/ipcBus');
       const aiRes = await globalIPCBus.sendIPC(24, 'driverd', 'DEV_WRITE_AI', { prompt });
       return { stdout: (aiRes.response || aiRes.data || '') + '\n', stderr: '', exitCode: 0 };
+    }
+
+    if (cmdName === '/dev/null') {
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+
+    if (cmdName === '/dev/zero') {
+      return { stdout: '\0'.repeat(1024), stderr: '', exitCode: 0 };
+    }
+
+    if (cmdName === '/dev/tty') {
+      return { stdout: pipeInput || '', stderr: '', exitCode: 0 };
+    }
+
+    if (cmdName === '/dev/urandom' || cmdName === '/dev/random') {
+      const bytes = new Uint8Array(64);
+      if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes);
+      const randStr = Array.from(bytes).map((b) => String.fromCharCode(b)).join('');
+      return { stdout: randStr, stderr: '', exitCode: 0 };
     }
 
     // Native script / EAF binary executable path execution via POSIX fork() -> execve() -> waitpid()

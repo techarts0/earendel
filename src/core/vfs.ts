@@ -698,7 +698,7 @@ export class VirtualFileSystem {
     }
 
     if (cleanPath === '/dev/null') {
-      return { id: 'dev_null', name: 'null', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'tty', size: 0, updatedAt: new Date(), content: '', parent: this.root };
+      return { id: 'dev_null', name: 'null', type: 'file', permissions: 'rwxrwxrwx', owner: 'root', group: 'tty', size: 0, updatedAt: new Date(), content: '', parent: this.root };
     }
 
     if (cleanPath === '/dev/ai') {
@@ -707,18 +707,18 @@ export class VirtualFileSystem {
     }
 
     if (cleanPath === '/dev/zero') {
-      return { id: 'dev_zero', name: 'zero', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'tty', size: 1024, updatedAt: new Date(), content: '\0'.repeat(1024), parent: this.root };
+      return { id: 'dev_zero', name: 'zero', type: 'file', permissions: 'rwxrwxrwx', owner: 'root', group: 'tty', size: 1024, updatedAt: new Date(), content: '\0'.repeat(1024), parent: this.root };
     }
 
     if (cleanPath === '/dev/urandom' || cleanPath === '/dev/random') {
       const bytes = new Uint8Array(64);
       if (typeof crypto !== 'undefined' && crypto.getRandomValues) crypto.getRandomValues(bytes);
       const randStr = Array.from(bytes).map((b) => String.fromCharCode(b)).join('');
-      return { id: 'dev_urandom', name: cleanPath.replace('/dev/', ''), type: 'file', permissions: 'r--r--r--', owner: 'root', group: 'tty', size: 64, updatedAt: new Date(), content: randStr, parent: this.root };
+      return { id: 'dev_urandom', name: cleanPath.replace('/dev/', ''), type: 'file', permissions: 'rwxrwxrwx', owner: 'root', group: 'tty', size: 64, updatedAt: new Date(), content: randStr, parent: this.root };
     }
 
     if (cleanPath === '/dev/tty') {
-      return { id: 'dev_tty', name: 'tty', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'tty', size: 0, updatedAt: new Date(), content: '', parent: this.root };
+      return { id: 'dev_tty', name: 'tty', type: 'file', permissions: 'rwxrwxrwx', owner: 'root', group: 'tty', size: 0, updatedAt: new Date(), content: '', parent: this.root };
     }
 
     if (cleanPath === '/dev/stdin' || cleanPath === '/dev/stdout' || cleanPath === '/dev/stderr') {
