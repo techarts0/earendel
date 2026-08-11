@@ -51,7 +51,7 @@ export interface ProcessControlBlock {
   rssKB: number;
   cpuUsagePercent: number;
   cwd: string;
-  fds: Map<number, FileDescriptor>; // File Descriptor table
+  fds?: Map<number, FileDescriptor>; // File Descriptor table
   pendingSignals?: Signal[];
   ipcPort?: string;
   isKernelDaemon?: boolean;

@@ -1,5 +1,6 @@
 import { SyscallNo, SyscallResult } from './types';
 import { globalIPCBus } from './ipcBus';
+import { globalKernelAgentManager } from './agentFramework';
 
 export interface SyscallTraceEntry {
   sysNo: SyscallNo;
@@ -19,6 +20,17 @@ export async function syscall(sysNo: SyscallNo, ...args: any[]): Promise<Syscall
   let sysName = SyscallNo[sysNo] ? SyscallNo[sysNo].replace(/^SYS_/, '').toLowerCase() : 'syscall';
   let formattedArgs = args.map((a) => (typeof a === 'string' ? `"${a}"` : JSON.stringify(a))).join(', ');
   let formattedRet = '0';
+
+  // Kernel Agent Framework Interception Trap (Observe -> Infer -> Act)
+  if (sysNo !== SyscallNo.SYS_INFER) {
+    try {
+      const actions = await globalKernelAgentManager.dispatchObservation('syscall', sysName, { sysNo, args, callerPid: currentCallerPid });
+      const blockedAction = actions.find((a) => a.actionType === 'BLOCK');
+      if (blockedAction) {
+        return { code: -1, data: null, error: `[capAgentd AI Firewall Intercept] ${blockedAction.reason}` };
+      }
+    } catch (_) {}
+  }
 
   try {
     let result: SyscallResult = { code: 0 };

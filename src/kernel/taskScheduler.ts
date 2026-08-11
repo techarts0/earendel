@@ -61,6 +61,81 @@ export class TaskScheduler {
       ]),
       isKernelDaemon: true,
     });
+
+    // PID 2: /lib/systemd/systemd-vfsd (User-space Virtual File System Daemon)
+    this.createProcess({
+      pid: 2,
+      ppid: 1,
+      name: '[vfsd]',
+      user: 'root',
+      state: 'RUNNING',
+      startTime: new Date(),
+      vszKB: 34000,
+      rssKB: 11000,
+      cpuUsagePercent: 0.1,
+      cwd: '/',
+      isKernelDaemon: true,
+    });
+
+    // PID 3: /lib/systemd/systemd-pmd (User-space Process Manager Daemon)
+    this.createProcess({
+      pid: 3,
+      ppid: 1,
+      name: '[pmd]',
+      user: 'root',
+      state: 'RUNNING',
+      startTime: new Date(),
+      vszKB: 28000,
+      rssKB: 9000,
+      cpuUsagePercent: 0.1,
+      cwd: '/',
+      isKernelDaemon: true,
+    });
+
+    // PID 4: /lib/systemd/systemd-driverd (User-space Device Driver Daemon)
+    this.createProcess({
+      pid: 4,
+      ppid: 1,
+      name: '[driverd]',
+      user: 'root',
+      state: 'RUNNING',
+      startTime: new Date(),
+      vszKB: 42000,
+      rssKB: 14000,
+      cpuUsagePercent: 0.1,
+      cwd: '/',
+      isKernelDaemon: true,
+    });
+
+    // PID 5: /usr/sbin/kagentd (Kernel Crash Self-Healing Daemon)
+    this.createProcess({
+      pid: 5,
+      ppid: 1,
+      name: '/usr/sbin/kagentd',
+      user: 'root',
+      state: 'RUNNING',
+      startTime: new Date(),
+      vszKB: 48000,
+      rssKB: 16000,
+      cpuUsagePercent: 0.1,
+      cwd: '/',
+      isKernelDaemon: true,
+    });
+
+    // PID 6: /usr/sbin/capAgentd (Kernel AI Capability Intent Firewall Daemon)
+    this.createProcess({
+      pid: 6,
+      ppid: 1,
+      name: '/usr/sbin/capAgentd',
+      user: 'root',
+      state: 'RUNNING',
+      startTime: new Date(),
+      vszKB: 52000,
+      rssKB: 18000,
+      cpuUsagePercent: 0.2,
+      cwd: '/',
+      isKernelDaemon: true,
+    });
   }
 
   public createProcess(pcb: ProcessControlBlock): ProcessControlBlock {

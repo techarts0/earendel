@@ -1,7 +1,7 @@
 import { globalIPCBus } from '../ipcBus';
 import { globalVFS } from '../../core/vfs';
 import { globalTaskScheduler } from '../taskScheduler';
-import { FileDescriptor, IPCMessage } from '../types';
+import { FileDescriptor, IPCMessage, ProcessControlBlock } from '../types';
 
 export class VFSDaemonService {
   public static readonly PID = 2;
@@ -19,7 +19,7 @@ export class VFSDaemonService {
     );
   }
 
-  private getPCB(pid: number) {
+  private getPCB(pid: number): ProcessControlBlock & { fds: Map<number, FileDescriptor> } {
     let pcb = globalTaskScheduler.getProcess(pid);
     if (!pcb) {
       pcb = globalTaskScheduler.createProcess({
@@ -40,7 +40,14 @@ export class VFSDaemonService {
         ]),
       });
     }
-    return pcb;
+    if (!pcb.fds) {
+      pcb.fds = new Map([
+        [0, { fd: 0, path: '/dev/stdin', offset: 0, flags: 'r' }],
+        [1, { fd: 1, path: '/dev/stdout', offset: 0, flags: 'w' }],
+        [2, { fd: 2, path: '/dev/stderr', offset: 0, flags: 'w' }],
+      ]);
+    }
+    return pcb as ProcessControlBlock & { fds: Map<number, FileDescriptor> };
   }
 
   private async handleIPCMessage(msg: IPCMessage): Promise<any> {

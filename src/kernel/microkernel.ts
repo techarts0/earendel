@@ -10,6 +10,7 @@ import { globalVMPageTable } from './vmPageTable';
 import { globalIPCSharedMem } from './ipcSharedMem';
 import { globalKAgentDaemon } from './services/kagentd';
 import { globalCapAgentDaemon } from './services/capAgentd';
+import { globalKernelAgentManager } from './agentFramework';
 
 export interface KernelDmesgLog {
   timestamp: string;
@@ -67,6 +68,12 @@ export class Microkernel {
       message,
       level,
     });
+
+    if (level === 'error' || level === 'panic') {
+      try {
+        globalKernelAgentManager.dispatchObservation('dmesg', message, { subsystem, level });
+      } catch (_) {}
+    }
   }
 
   public getDmesgLogs(): KernelDmesgLog[] {

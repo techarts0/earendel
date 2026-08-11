@@ -2,6 +2,7 @@ import { Command, ExecutionContext, ExecutionResult } from './types';
 import { syscall } from '../kernel/syscall';
 import { SyscallNo } from '../kernel/types';
 import { globalVMPageTable } from '../kernel/vmPageTable';
+import { globalKernelAgentManager } from '../kernel/agentFramework';
 
 export class JsRuntimeEngine {
   /**
@@ -189,6 +190,34 @@ export class JsRuntimeEngine {
         },
         mem: {
           malloc: (sizeBytes: number) => ({ ptr: Math.floor(Math.random() * 0x100000), size: sizeBytes }),
+        },
+        agent: {
+          register: (agentObj: any) => {
+            const agent = {
+              id: agentObj.id || `agent_${Math.random().toString(36).substring(2, 7)}`,
+              name: agentObj.name || 'User Agent',
+              description: agentObj.description || 'User-defined application agent',
+              isDaemon: Boolean(agentObj.isDaemon),
+              enabled: agentObj.enabled ?? true,
+              observe: async (obs: any) => (agentObj.observe ? agentObj.observe(obs) : true),
+              infer: async (obs: any) => (agentObj.infer ? agentObj.infer(obs) : { actionType: 'LOG', reason: 'User agent infer pass' }),
+              act: async (act: any) => (agentObj.act ? agentObj.act(act) : true),
+            };
+            globalKernelAgentManager.registerAgent(agent);
+            return agent.id;
+          },
+          list: () => {
+            return globalKernelAgentManager.getAgents().map((a: any) => ({
+              id: a.id,
+              name: a.name,
+              isDaemon: a.isDaemon,
+              enabled: a.enabled,
+              description: a.description,
+            }));
+          },
+          dispatch: async (source: string, event: string, payload: any) => {
+            return globalKernelAgentManager.dispatchObservation(source as any, event, payload);
+          },
         },
       };
 
