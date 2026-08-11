@@ -6,7 +6,7 @@ export const dockerCommands: Command[] = [
     name: 'docker',
     description: 'Create and manage Docker containers and images',
     category: 'sys',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       const sub = ctx.args[0];
 
       if (!sub) {
@@ -69,6 +69,39 @@ export const dockerCommands: Command[] = [
         }
 
         return { stdout: `${container.id}\n`, stderr: '', exitCode: 0 };
+      }
+
+      if (sub === 'exec') {
+        const targetContainer = ctx.args[1];
+        const execCmd = ctx.args.slice(2).filter((a) => !a.startsWith('-'))[0] || 'hostname';
+        if (!targetContainer) {
+          return { stdout: '', stderr: 'docker exec: missing container name or ID\nUsage: docker exec [OPTIONS] CONTAINER COMMAND [ARG...]\n', exitCode: 1 };
+        }
+
+        const container = globalDockerEngine.getContainer(targetContainer);
+        if (!container || container.status !== 'Up') {
+          return { stdout: '', stderr: `Error response from daemon: No such running container: ${targetContainer}\n`, exitCode: 1 };
+        }
+
+        const { globalNamespaceManager } = await import('../../kernel/namespace');
+        const containerNs = globalNamespaceManager.getAllNamespaces().find((n) => n.nsId === container.nsId);
+
+        const { globalCommandRegistry } = await import('../commandRegistry');
+        const execArgs = ctx.args.slice(2).filter((a) => !a.startsWith('-')).slice(1);
+
+        const res = await globalCommandRegistry.execute(execCmd, {
+          ...ctx,
+          args: execArgs,
+          env: {
+            ...ctx.env,
+            HOSTNAME: containerNs?.utsHostname || container.name,
+            USER: 'root',
+            HOME: '/root',
+          },
+        });
+
+        let prefix = `\x1b[36m[Docker Container: ${container.name} (${containerNs?.utsHostname || container.id.slice(0, 8)})]\x1b[0m\n`;
+        return { stdout: prefix + res.stdout, stderr: res.stderr, exitCode: res.exitCode };
       }
 
       if (sub === 'stop') {

@@ -1,4 +1,6 @@
-// Earendel Virtual Docker Container Engine
+import { globalVFS } from './vfs';
+import { globalNamespaceManager } from '../kernel/namespace';
+
 export interface DockerImage {
   id: string;
   repository: string;
@@ -16,6 +18,8 @@ export interface DockerContainer {
   status: 'Up' | 'Exited';
   statusText: string;
   ports: string;
+  nsId: string;
+  mergedPath: string;
 }
 
 class DockerEngine {
@@ -38,15 +42,27 @@ class DockerEngine {
   }
 
   private initDefaultContainers() {
-    this.containers.set('c1a2b3c4d5e6', {
-      id: 'c1a2b3c4d5e6',
+    const defaultId = 'c1a2b3c4d5e6';
+    const mergedPath = `/var/lib/docker/overlay2/${defaultId}/merged`;
+    globalVFS.mkdir(mergedPath, true);
+    globalVFS.writeFile(`${mergedPath}/etc/hostname`, 'web-server\n');
+
+    const ns = globalNamespaceManager.createNamespace(`ns_container_${defaultId}`, {
+      utsHostname: 'web-server',
+      chrootPath: mergedPath,
+    });
+
+    this.containers.set(defaultId, {
+      id: defaultId,
       image: 'nginx:alpine',
       name: 'web-server',
-      command: '"/docker-entrypoint.…"',
+      command: '"/docker-entrypoint.sh"',
       created: '2 hours ago',
       status: 'Up',
       statusText: 'Up 2 hours',
       ports: '0.0.0.0:8080->80/tcp',
+      nsId: ns.nsId,
+      mergedPath,
     });
   }
 
@@ -69,8 +85,27 @@ class DockerEngine {
 
   public runContainer(imageName: string, name?: string, ports?: string, cmd?: string): DockerContainer {
     const hexId = Math.random().toString(16).substring(2, 14);
-    const containerName = name || `suspicious_${Math.floor(Math.random() * 899 + 100)}`;
+    const containerName = name || `container_${Math.floor(Math.random() * 899 + 100)}`;
     const fullImage = imageName.includes(':') ? imageName : `${imageName}:latest`;
+    const mergedPath = `/var/lib/docker/overlay2/${hexId}/merged`;
+
+    // 1. Create physical container root in Overlay2 VFS
+    globalVFS.mkdir(mergedPath, true);
+    globalVFS.mkdir(`${mergedPath}/etc`, true);
+    globalVFS.mkdir(`${mergedPath}/bin`, true);
+    globalVFS.mkdir(`${mergedPath}/root`, true);
+    globalVFS.mkdir(`${mergedPath}/tmp`, true);
+
+    globalVFS.writeFile(`${mergedPath}/etc/hostname`, `${containerName}\n`);
+    globalVFS.writeFile(`${mergedPath}/etc/os-release`, `NAME="${imageName}"\nVERSION="22.04"\nID=${imageName}\nPRETTY_NAME="Container (${fullImage})"\n`);
+
+    // 2. Create isolated ProcessNamespace
+    const ns = globalNamespaceManager.createNamespace(`ns_container_${hexId}`, {
+      utsHostname: containerName,
+      chrootPath: mergedPath,
+      cwd: '/root',
+      env: { USER: 'root', HOME: '/root', PATH: '/bin:/usr/bin', HOSTNAME: containerName },
+    });
 
     const container: DockerContainer = {
       id: hexId,
@@ -81,6 +116,8 @@ class DockerEngine {
       status: 'Up',
       statusText: 'Up About a minute',
       ports: ports ? `0.0.0.0:${ports}->80/tcp` : '',
+      nsId: ns.nsId,
+      mergedPath,
     };
 
     this.containers.set(hexId, container);
@@ -98,6 +135,7 @@ class DockerEngine {
   public removeContainer(idOrName: string): boolean {
     const c = this.getContainer(idOrName);
     if (!c) return false;
+    globalVFS.remove(c.mergedPath, true);
     return this.containers.delete(c.id);
   }
 }
