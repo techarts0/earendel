@@ -112,6 +112,14 @@ export async function syscall(sysNo: SyscallNo, ...args: any[]): Promise<Syscall
         break;
       }
 
+      case SyscallNo.SYS_INFER: {
+        const [prompt, opts] = args;
+        const res = await globalIPCBus.sendIPC(currentCallerPid, 'driverd', 'SYS_INFER', { prompt, opts });
+        result = { code: 0, data: res.response };
+        formattedRet = res.response ? `"${res.response.slice(0, 30)}..."` : '0';
+        break;
+      }
+
       case SyscallNo.SYS_EXIT: {
         const [exitPid] = args;
         const res = await globalIPCBus.sendIPC(exitPid || currentCallerPid, 'pmd', 'SYS_EXIT', {});

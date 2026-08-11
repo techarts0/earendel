@@ -72,6 +72,10 @@ export class JsRuntimeEngine {
           exit: (code: number) => syscall(SyscallNo.SYS_EXIT, code),
           kill: (pid: number, signal?: number) => syscall(SyscallNo.SYS_KILL, pid, signal || 9),
           getpid: () => syscall(SyscallNo.SYS_GETPID),
+          infer: async (prompt: string, opts?: any) => {
+            const res = await syscall(SyscallNo.SYS_INFER, prompt, opts);
+            return res.data;
+          },
           getenv: (key: string) => ctx.env[key] ?? null,
           setenv: (key: string, val: string) => { ctx.env[key] = val; },
           getcwd: () => ctx.env['PWD'] || '/home/hello',

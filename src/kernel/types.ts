@@ -13,6 +13,7 @@ export enum SyscallNo {
   SYS_WAITPID = 61,
   SYS_KILL = 62,
   SYS_GETPID = 39,
+  SYS_INFER = 25,
   SYS_IPC_SEND = 1001,
   SYS_IPC_RECV = 1002,
   SYS_DMESG = 1003,

@@ -2,6 +2,7 @@
 import { globalCommandRegistry } from './commandRegistry';
 import { globalHostMountEngine } from './hostMountEngine';
 import { globalTaskScheduler } from '../kernel/taskScheduler';
+import { globalIPCBus } from '../kernel/ipcBus';
 
 export interface VFSNode {
   id: string;
@@ -89,6 +90,11 @@ export class VirtualFileSystem {
 
     this.writeFile('/dev/null', '');
     this.writeFile('/dev/zero', '');
+    this.writeFile('/dev/ai', '[Earendel AI Character Device Driver (/dev/ai)]\nStatus: ONLINE (Device Major 10, Minor 250)\nUsage: echo "prompt" > /dev/ai OR cat syslog | /dev/ai\n');
+    this.writeFile(
+      '/etc/llm.conf',
+      '# Earendel POSIX Microkernel AI Subsystem Configuration (/etc/llm.conf)\nPROVIDER=openai\nBASE_URL=https://api.openai.com/v1\nMODEL_NAME=gpt-4o-mini\nAPI_KEY=sk-your-api-key-here\nTIMEOUT_SEC=30\nENABLE_LOCAL_MOCK=auto\n'
+    );
     this.writeFile(
       '/var/log/syslog',
       'Aug  8 02:00:01 earendel systemd[1]: Starting System Logging Service...\nAug  8 02:00:01 earendel systemd[1]: Started System Logging Service.\nAug  8 02:00:02 earendel kernel: [    0.000000] Linux version 5.15.0-88-generic (buildd@bos02-amd64-035)\nAug  8 02:00:05 earendel login: hello logged in on tty1\n'
@@ -437,6 +443,16 @@ export class VirtualFileSystem {
   writeFile(pathStr: string, content: string, currentUser = 'hello'): boolean {
     const absPath = this.resolvePath(pathStr);
     if (absPath === '/dev/null') return true;
+
+    if (absPath === '/dev/ai') {
+      globalIPCBus.sendIPC(24, 'driverd', 'DEV_WRITE_AI', { prompt: content }).then((res: any) => {
+        if (res && res.response) {
+          const aiNode = this.getNodeByPath('/dev/ai');
+          if (aiNode) aiNode.content = res.response;
+        }
+      });
+      return true;
+    }
 
     if (globalHostMountEngine.getMatchingMount(absPath)) {
       globalHostMountEngine.writeFile(absPath, content);
