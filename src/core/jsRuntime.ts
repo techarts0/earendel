@@ -70,18 +70,117 @@ export class JsRuntimeEngine {
           fork: (name: string, cwd: string) => syscall(SyscallNo.SYS_FORK, name, cwd),
           execve: (path: string, args: string[]) => syscall(SyscallNo.SYS_EXECVE, path, args),
           exit: (code: number) => syscall(SyscallNo.SYS_EXIT, code),
+          kill: (pid: number, signal?: number) => syscall(SyscallNo.SYS_KILL, pid, signal || 9),
           getpid: () => syscall(SyscallNo.SYS_GETPID),
+          getenv: (key: string) => ctx.env[key] ?? null,
+          setenv: (key: string, val: string) => { ctx.env[key] = val; },
+          getcwd: () => ctx.env['PWD'] || '/home/hello',
+          chdir: (path: string) => {
+            const resolved = ctx.vfs.resolvePath(path);
+            const node = ctx.vfs.getNodeByPath(resolved);
+            if (node && node.type === 'directory') {
+              ctx.env['PWD'] = resolved;
+              return true;
+            }
+            return false;
+          },
+          uname: () => ({
+            sysname: 'Earendel-POSIX',
+            nodename: ctx.env['HOSTNAME'] || 'earendel-microkernel',
+            release: '6.5.0-generic',
+            version: 'Earendel Microkernel v1.0.0-pure-posix',
+            machine: 'x86_64',
+          }),
           getEmbed: (filename: string) => embeddedAssets[filename] ?? null,
           readEmbed: (filename: string) => embeddedAssets[filename] ?? null,
+        },
+        fs: {
+          stat: (path: string) => {
+            const resolved = ctx.vfs.resolvePath(path);
+            const node = ctx.vfs.getNodeByPath(resolved);
+            if (!node) return null;
+            return {
+              name: node.name,
+              size: node.size || 0,
+              isDirectory: node.type === 'directory',
+              isFile: node.type === 'file',
+              isSymlink: node.type === 'symlink',
+              owner: node.owner,
+              group: node.group,
+              permissions: node.permissions,
+              updatedAt: node.updatedAt,
+            };
+          },
+          exists: (path: string) => {
+            const resolved = ctx.vfs.resolvePath(path);
+            return ctx.vfs.getNodeByPath(resolved) !== null;
+          },
+          readdir: (path: string) => {
+            const resolved = ctx.vfs.resolvePath(path);
+            const node = ctx.vfs.getNodeByPath(resolved);
+            if (!node || node.type !== 'directory' || !node.children) return [];
+            return Array.from(node.children.keys());
+          },
+          mkdir: (path: string) => ctx.vfs.mkdir(ctx.vfs.resolvePath(path), true),
+          unlink: (path: string) => ctx.vfs.remove(ctx.vfs.resolvePath(path), true),
+          chmod: (path: string, mode: string) => ctx.vfs.chmod(ctx.vfs.resolvePath(path), mode),
         },
         io: {
           printf: (fmt: any, ...args: any[]) => {
             let str = String(fmt);
             args.forEach((a) => {
-              str = str.replace('%s', String(a)).replace('%d', String(a));
+              str = str.replace('%s', String(a)).replace('%d', String(a)).replace('%x', Number(a).toString(16));
             });
             stdoutBuffer += str + '\n';
             return str;
+          },
+          puts: (str: string) => {
+            stdoutBuffer += String(str) + '\n';
+            return str;
+          },
+          color: (colorName: string, text: string) => {
+            const colors: Record<string, string> = {
+              red: '\x1b[31m',
+              green: '\x1b[32m',
+              yellow: '\x1b[33m',
+              blue: '\x1b[34m',
+              magenta: '\x1b[35m',
+              cyan: '\x1b[36m',
+              bold: '\x1b[1m',
+              dim: '\x1b[90m',
+              reset: '\x1b[0m',
+            };
+            const c = colors[colorName.toLowerCase()] || '';
+            return `${c}${text}\x1b[0m`;
+          },
+        },
+        net: {
+          fetch: async (url: string) => {
+            try {
+              const resp = await fetch(url);
+              const text = await resp.text();
+              return {
+                status: resp.status,
+                ok: resp.ok,
+                body: text,
+                json: () => JSON.parse(text),
+              };
+            } catch (e: any) {
+              return { status: 500, ok: false, body: e.message, json: () => ({ error: e.message }) };
+            }
+          },
+          gethostbyname: async (domain: string) => {
+            try {
+              const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${domain}&type=A`, {
+                headers: { accept: 'application/dns-json' },
+              });
+              const data = await res.json();
+              const answers = data.Answer || [];
+              const ip = answers.find((a: any) => a.type === 1)?.data || '127.0.0.1';
+              return ip;
+            } catch (_) {
+              return '127.0.0.1';
+            }
           },
         },
         mem: {
