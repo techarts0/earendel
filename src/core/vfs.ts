@@ -91,6 +91,7 @@ export class VirtualFileSystem {
     this.writeFile('/dev/null', '');
     this.writeFile('/dev/zero', '');
     this.writeFile('/dev/ai', '[Earendel AI Character Device Driver (/dev/ai)]\nStatus: ONLINE (Device Major 10, Minor 250)\nUsage: echo "prompt" > /dev/ai OR cat syslog | /dev/ai\n');
+    this.writeFile('/dev/skill', '[Earendel Harness-Skill Engine (/dev/skill)]\nStatus: ONLINE\nUsage: cat skill.md | /dev/skill\n');
     this.writeFile(
       '/etc/llm.conf',
       '# Earendel POSIX Microkernel AI Subsystem Configuration (/etc/llm.conf)\nPROVIDER=openai\nBASE_URL=https://api.openai.com/v1\nMODEL_NAME=gpt-4o-mini\nAPI_KEY=sk-your-api-key-here\nTIMEOUT_SEC=30\nENABLE_LOCAL_MOCK=auto\n'
@@ -450,7 +451,20 @@ export class VirtualFileSystem {
           const aiNode = this.getNodeByPath('/dev/ai');
           if (aiNode) aiNode.content = res.response;
         }
-      });
+      }).catch(() => { });
+      return true;
+    }
+
+    if (absPath === '/dev/skill') {
+      // Ensure harnessEngine module is loaded and catch unhandled IPC boot errors
+      import('./harnessEngine').then(() => {
+        globalIPCBus.sendIPC(7, 'harnessd', 'DEV_WRITE_SKILL', { prompt: content }).then((res: any) => {
+          if (res && res.response) {
+            const skillNode = this.getNodeByPath('/dev/skill');
+            if (skillNode) skillNode.content = res.response;
+          }
+        }).catch(() => { });
+      }).catch(() => { });
       return true;
     }
 
@@ -677,7 +691,7 @@ export class VirtualFileSystem {
         });
       };
 
-      ['null', 'zero', 'urandom', 'random', 'tty', 'ai'].forEach((f) => mkDevChild(f, 'file'));
+      ['null', 'zero', 'urandom', 'random', 'tty', 'ai', 'skill'].forEach((f) => mkDevChild(f, 'file'));
       ['pts'].forEach((d) => mkDevChild(d, 'directory'));
       mkDevChild('stdin', 'symlink', '/proc/self/fd/0');
       mkDevChild('stdout', 'symlink', '/proc/self/fd/1');
@@ -704,6 +718,11 @@ export class VirtualFileSystem {
     if (cleanPath === '/dev/ai') {
       const aiContent = this.root?.children?.get('dev')?.children?.get('ai')?.content || '[Earendel AI Character Device Driver (/dev/ai)]\nStatus: ONLINE (Device Major 10, Minor 250)\nUsage: echo "prompt" > /dev/ai OR cat syslog | /dev/ai\n';
       return { id: 'dev_ai', name: 'ai', type: 'file', permissions: 'rwxrwxrwx', owner: 'root', group: 'tty', size: aiContent.length, updatedAt: new Date(), content: aiContent, parent: this.root };
+    }
+
+    if (cleanPath === '/dev/skill') {
+      const skillContent = this.root?.children?.get('dev')?.children?.get('skill')?.content || '[Earendel Harness-Skill Engine (/dev/skill)]\nStatus: ONLINE\nUsage: cat skill.md | /dev/skill\n';
+      return { id: 'dev_skill', name: 'skill', type: 'file', permissions: 'rwxrwxrwx', owner: 'root', group: 'tty', size: skillContent.length, updatedAt: new Date(), content: skillContent, parent: this.root };
     }
 
     if (cleanPath === '/dev/zero') {

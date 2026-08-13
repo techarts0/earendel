@@ -430,7 +430,7 @@ export class ShellEngine {
     }
 
     // Native script / EAF binary executable path execution via POSIX fork() -> execve() -> waitpid()
-    if (cmdName.startsWith('./') || cmdName.startsWith('/') || cmdName.endsWith('.sh') || cmdName.endsWith('.eaf')) {
+    if (cmdName.startsWith('./') || cmdName.startsWith('/') || cmdName.endsWith('.sh') || cmdName.endsWith('.eaf') || cmdName.endsWith('.md')) {
       const scriptPath = cmdName;
       const node = globalVFS.getNodeByPath(scriptPath);
 
@@ -448,8 +448,20 @@ export class ShellEngine {
 
         // Check for EAF Magic Header (EAF01 or EAF\x01)
         const isEaf = scriptPath.endsWith('.eaf') || (content.includes('"magic"') && content.includes('EAF'));
+        const isSkill = content.startsWith('#!/dev/skill') || content.includes('<!-- earendel-skill -->');
 
-        if (isEaf) {
+        if (isSkill) {
+          const { globalHarnessEngine } = await import('./harnessEngine');
+          const ctx: ExecutionContext = {
+            vfs: globalVFS,
+            env: childEnv,
+            lang: this.lang,
+            args: cmdArgs,
+            pipeInput,
+            processManager: globalProcessManager,
+          };
+          res = await globalHarnessEngine.executeSkill(content, ctx);
+        } else if (isEaf) {
           try {
             const eafObj = JSON.parse(content);
             const arch = eafObj.header?.arch || 'js-vm';

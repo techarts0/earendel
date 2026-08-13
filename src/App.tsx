@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Terminal } from './components/Terminal';
 import { NanoEditorModal } from './components/NanoEditorModal';
 import { ViEditorModal } from './components/ViEditorModal';
+import { HarnessTuiModal } from './components/HarnessTuiModal';
 import { CheatSheetModal } from './components/CheatSheetModal';
 
 import { FramebufferModal } from './components/FramebufferModal';
@@ -9,6 +10,7 @@ import { FramebufferModal } from './components/FramebufferModal';
 export function App() {
   const [nanoModal, setNanoModal] = useState<{ path: string; content: string } | null>(null);
   const [viModal, setViModal] = useState<{ path: string; content: string } | null>(null);
+  const [harnessTuiModal, setHarnessTuiModal] = useState<{ path: string; content: string } | null>(null);
   const [showCheatModal, setShowCheatModal] = useState(false);
   const [tmuxSplit, setTmuxSplit] = useState<'none' | 'v' | 'h'>('none');
 
@@ -36,6 +38,7 @@ export function App() {
           <Terminal
             onOpenNano={(data) => setNanoModal(data)}
             onOpenVi={(data) => setViModal(data)}
+            onOpenHarnessTui={(data) => setHarnessTuiModal(data)}
             onOpenCheat={() => setShowCheatModal(true)}
             onSplitTmux={handleSplitTmux}
           />
@@ -57,6 +60,7 @@ export function App() {
               skipBootScreen={true}
               onOpenNano={(data) => setNanoModal(data)}
               onOpenVi={(data) => setViModal(data)}
+              onOpenHarnessTui={(data) => setHarnessTuiModal(data)}
               onOpenCheat={() => setShowCheatModal(true)}
               onSplitTmux={handleSplitTmux}
             />
@@ -79,6 +83,15 @@ export function App() {
           filePath={viModal.path}
           initialContent={viModal.content}
           onClose={() => setViModal(null)}
+        />
+      )}
+
+      {/* Harness TUI Cockpit Modal Trigger */}
+      {harnessTuiModal && (
+        <HarnessTuiModal
+          filePath={harnessTuiModal.path}
+          initialContent={harnessTuiModal.content}
+          onClose={() => setHarnessTuiModal(null)}
         />
       )}
 

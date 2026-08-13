@@ -15,12 +15,13 @@ import { highlightCommandLine } from '../core/syntaxHighlighter';
 interface TerminalProps {
   onOpenNano?: (opts: { path: string; content: string }) => void;
   onOpenVi?: (opts: { path: string; content: string }) => void;
+  onOpenHarnessTui?: (opts: { path: string; content: string }) => void;
   onOpenCheat?: () => void;
   onSplitTmux?: (type: 'v' | 'h' | 'exit') => void;
   skipBootScreen?: boolean;
 }
 
-export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpenCheat, onSplitTmux, skipBootScreen }) => {
+export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpenHarnessTui, onOpenCheat, onSplitTmux, skipBootScreen }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -100,8 +101,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
     const showUbuntuWelcome = () => {
       globalSoundEngine.playLoginSound();
       term.reset();
-      term.writeln('\x1b[1;36mWelcome to Earendel, An AI Native Microkernel OS on V8\x1b[0m');
-      term.writeln('\x1b[90mhttps://github.com/techarts0/earendel\x1b[0m');
+      term.writeln('\x1b[1;36mWelcome to Earendel\x1b[0m');
       term.writeln('\x1b[90mType \x1b[33mhelp\x1b[90m for commands, \x1b[33mlang zh\x1b[90m for Chinese.\x1b[0m\n');
       term.write(promptStr());
     };
@@ -273,6 +273,10 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
 
             if (res.openVi && onOpenVi) {
               onOpenVi(res.openVi);
+            }
+
+            if (res.openHarnessTui && onOpenHarnessTui) {
+              onOpenHarnessTui(res.openHarnessTui);
             }
 
             if (res.openCheat && onOpenCheat) {
