@@ -424,6 +424,20 @@ export class ShellEngine {
       return await globalHarnessEngine.executeSkill(content, ctx);
     }
 
+    if (cmdName === '/dev/net/fetch') {
+      const url = pipeInput || cmdArgs.join(' ');
+      const { eslibNet } = await import('./eslibNet');
+      const res = await eslibNet.fetch(url);
+      return { stdout: (res?.body || res?.error || '') + '\n', stderr: '', exitCode: res?.ok ? 0 : 1 };
+    }
+
+    if (cmdName === '/dev/net/dns') {
+      const hostname = pipeInput || cmdArgs.join(' ');
+      const { eslibNet } = await import('./eslibNet');
+      const ip = await eslibNet.gethostbyname(hostname);
+      return { stdout: `${hostname} -> ${ip}\n`, stderr: '', exitCode: 0 };
+    }
+
     if (cmdName === '/dev/null') {
       return { stdout: '', stderr: '', exitCode: 0 };
     }

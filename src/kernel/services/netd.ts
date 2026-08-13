@@ -27,12 +27,22 @@ export class NetworkDaemon {
   }
 
   private async handleFetch(payload: { url: string; method?: string; headers?: Record<string, string>; body?: any }) {
-    const { url, method = 'GET', headers = {}, body } = payload;
+    let { url, method = 'GET', headers = {}, body } = payload;
+    if (!url) {
+      return { status: 0, statusText: 'Bad URL', ok: false, body: '', error: 'URL is required' };
+    }
+
+    // Auto prepend https:// if scheme is missing
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      url = `https://${url}`;
+    }
+
     try {
       const response = await fetch(url, {
         method,
         headers,
         body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined,
+        signal: AbortSignal.timeout(10000),
       });
 
       const text = await response.text();
@@ -55,23 +65,31 @@ export class NetworkDaemon {
   }
 
   private async handleResolve(payload: { hostname: string }) {
-    const { hostname } = payload;
-    if (hostname === 'localhost' || hostname === '127.0.0.1') {
-      return { hostname, ip: '127.0.0.1', addresses: ['127.0.0.1'] };
+    let { hostname } = payload;
+    if (!hostname) {
+      return { hostname: '', ip: '127.0.0.1', addresses: ['127.0.0.1'] };
+    }
+
+    // Clean hostname: strip http(s)://, paths, ports and query params
+    const cleanHost = hostname.replace(/^https?:\/\//i, '').split('/')[0].split(':')[0].trim();
+
+    if (cleanHost === 'localhost' || cleanHost === '127.0.0.1') {
+      return { hostname: cleanHost, ip: '127.0.0.1', addresses: ['127.0.0.1'] };
     }
 
     try {
       // Cloudflare DoH (DNS-over-HTTPS) JSON Query
-      const dohUrl = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(hostname)}&type=A`;
+      const dohUrl = `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(cleanHost)}&type=A`;
       const res = await fetch(dohUrl, {
         headers: { Accept: 'application/dns-json' },
+        signal: AbortSignal.timeout(5000),
       });
       const data = await res.json();
       
       if (data && data.Answer && data.Answer.length > 0) {
         const ips = data.Answer.filter((ans: any) => ans.type === 1).map((ans: any) => ans.data);
         return {
-          hostname,
+          hostname: cleanHost,
           ip: ips[0] || '104.21.55.1',
           addresses: ips,
         };
@@ -80,7 +98,7 @@ export class NetworkDaemon {
 
     // Fallback DoH Mock
     return {
-      hostname,
+      hostname: cleanHost,
       ip: '104.21.55.1',
       addresses: ['104.21.55.1'],
     };

@@ -191,9 +191,13 @@ export const netCommands: Command[] = [
     description: 'transfer a URL via Earendel Unified Network Subsystem (Syscall #30)',
     category: 'net',
     execute: async (ctx) => {
-      const url = ctx.args[0];
+      let url = ctx.args[0];
       if (!url) {
         return { stdout: '', stderr: "curl: try 'curl --help' or 'curl <url>' for more information\n", exitCode: 2 };
+      }
+
+      if (!url.startsWith('http://') && !url.startsWith('https://')) {
+        url = `https://${url}`;
       }
 
       const { eslibNet } = await import('../eslibNet');

@@ -713,6 +713,18 @@ export class VirtualFileSystem {
   private generateDevNode(absPath: string): VFSNode | null {
     const cleanPath = absPath.replace(/\/$/, '') || '/dev';
 
+    const devDirNode: VFSNode = {
+      id: 'dev_root',
+      name: 'dev',
+      type: 'directory',
+      permissions: 'rwxr-xr-x',
+      owner: 'root',
+      group: 'root',
+      size: 4096,
+      updatedAt: new Date(),
+      parent: this.root,
+    };
+
     if (cleanPath === '/dev') {
       const childrenMap = new Map<string, VFSNode>();
       const mkDevChild = (n: string, t: 'file' | 'directory' | 'symlink', target?: string) => {
@@ -727,28 +739,41 @@ export class VirtualFileSystem {
           updatedAt: new Date(),
           symlinkTarget: target,
           children: t === 'directory' ? new Map() : undefined,
-          parent: this.root,
+          parent: devDirNode,
         });
       };
 
       ['null', 'zero', 'urandom', 'random', 'tty', 'ai', 'skill'].forEach((f) => mkDevChild(f, 'file'));
-      ['pts'].forEach((d) => mkDevChild(d, 'directory'));
+      ['pts', 'net'].forEach((d) => mkDevChild(d, 'directory'));
       mkDevChild('stdin', 'symlink', '/proc/self/fd/0');
       mkDevChild('stdout', 'symlink', '/proc/self/fd/1');
       mkDevChild('stderr', 'symlink', '/proc/self/fd/2');
 
-      return {
-        id: 'dev_root',
-        name: 'dev',
-        type: 'directory',
-        permissions: 'rwxr-xr-x',
-        owner: 'root',
-        group: 'root',
-        size: 4096,
-        updatedAt: new Date(),
-        children: childrenMap,
-        parent: this.root,
-      };
+      devDirNode.children = childrenMap;
+      return devDirNode;
+    }
+
+    if (cleanPath === '/dev/net') {
+      const netChildren = new Map<string, VFSNode>();
+      const fetchContent = this.root?.children?.get('dev')?.children?.get('net')?.children?.get('fetch')?.content || '[Earendel POSIX Network Fetch Device (/dev/net/fetch)]\nUsage: echo "https://api.github.com/zen" > /dev/net/fetch\n';
+      const dnsContent = this.root?.children?.get('dev')?.children?.get('net')?.children?.get('dns')?.content || '[Earendel POSIX DoH DNS Device (/dev/net/dns)]\nUsage: echo "google.com" > /dev/net/dns\n';
+
+      const netNode: VFSNode = { id: 'dev_net', name: 'net', type: 'directory', permissions: 'r-xr-xr-x', owner: 'root', group: 'root', size: 4096, updatedAt: new Date(), children: netChildren, parent: devDirNode };
+
+      netChildren.set('fetch', { id: 'dev_net_fetch', name: 'fetch', type: 'file', permissions: 'rwxrwxrwx', owner: 'root', group: 'tty', size: fetchContent.length, updatedAt: new Date(), content: fetchContent, parent: netNode });
+      netChildren.set('dns', { id: 'dev_net_dns', name: 'dns', type: 'file', permissions: 'rwxrwxrwx', owner: 'root', group: 'tty', size: dnsContent.length, updatedAt: new Date(), content: dnsContent, parent: netNode });
+
+      return netNode;
+    }
+
+    if (cleanPath === '/dev/net/fetch') {
+      const netNode = this.generateDevNode('/dev/net');
+      return netNode?.children?.get('fetch') || null;
+    }
+
+    if (cleanPath === '/dev/net/dns') {
+      const netNode = this.generateDevNode('/dev/net');
+      return netNode?.children?.get('dns') || null;
     }
 
     if (cleanPath === '/dev/null') {
