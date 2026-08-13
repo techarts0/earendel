@@ -2,6 +2,7 @@ import { ExecutionContext, ExecutionResult } from './types';
 import { globalIPCBus } from '../kernel/ipcBus';
 import { IPCMessage } from '../kernel/types';
 import { globalShellEngine } from './shellEngine';
+import { globalMcpClientManager } from './mcpClient';
 
 export enum HarnessState {
   PARSE = 'PARSE',
@@ -80,10 +81,22 @@ export class HarnessEngine {
               }
             } catch (e) {}
 
+            // Discover configured MCP tools
+            let mcpToolsDesc = '';
+            try {
+              const mcpTools = await globalMcpClientManager.listTools();
+              mcpToolsDesc = mcpTools.map((t) => `${t.serverName} (${t.description})`).join(', ');
+            } catch (e) {}
+
             // Initial AI prompt framing
-            const sysPrompt = `You are the Earendel OS Harness-Skill engine. Execute the user's task by outputting executable bash commands wrapped inside \`\`\`bash ... \`\`\` blocks.
+            const sysPrompt = `You are the Earendel OS Harness-Skill engine. Execute the user's task by outputting executable bash commands inside \`\`\`bash ... \`\`\` blocks, or MCP tool invocations inside \`\`\`json ... \`\`\` blocks.
 Available System Tools: [${availableTools}].
-Important: Output valid bash lines. Keep instructions minimal.`;
+Available External MCP Tools: [${mcpToolsDesc || 'none'}].
+To call an MCP tool, use:
+\`\`\`json
+{ "mcp": "serverName/toolName", "args": { ... } }
+\`\`\`
+Important: Output valid bash lines or JSON MCP tool calls. Keep instructions minimal.`;
 
             ctx.conversationHistory.push(`${sysPrompt}\n\nUser Skill Task:\n${ctx.originalSkillContent}`);
             currentState = HarnessState.INFER;
@@ -110,16 +123,19 @@ Important: Output valid bash lines. Keep instructions minimal.`;
         }
 
         case HarnessState.ACT: {
-          this.appendLog(ctx, currentState, 'Extracting and executing bash commands...', '32');
+          this.appendLog(ctx, currentState, 'Extracting and executing commands / MCP tools...', '32');
           
           const lastResponse = ctx.conversationHistory[ctx.conversationHistory.length - 1];
-          // Robust regex for ```bash, ```sh, ```shell or generic ``` blocks
-          const regex = /```(?:bash|sh|shell)?\r?\n([\s\S]*?)```/gi;
+          
+          // Match bash or json blocks
+          const regex = /```(?:bash|sh|shell|json)?\r?\n([\s\S]*?)```/gi;
           let match;
-          const blocks: string[] = [];
+          const blocks: { type: 'bash' | 'json'; code: string }[] = [];
           while ((match = regex.exec(lastResponse)) !== null) {
+            const raw = match[0];
             const code = match[1].trim();
-            if (code) blocks.push(code);
+            const type = raw.toLowerCase().startsWith('```json') ? 'json' : 'bash';
+            if (code) blocks.push({ type, code });
           }
 
           if (blocks.length === 0) {
@@ -130,21 +146,37 @@ Important: Output valid bash lines. Keep instructions minimal.`;
 
           let allSucceeded = true;
           for (const block of blocks) {
-            // Process block line by line to handle multiline input properly
-            const lines = block.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
-            
-            for (const line of lines) {
-              this.appendLog(ctx, currentState, `Executing command: ${line}`, '90');
-              const res = await globalShellEngine.execute(line, execCtx.args);
-              
-              if (res.stdout) this.appendLog(ctx, currentState, `[stdout]\n${res.stdout.trim()}`, '90');
-              if (res.stderr) this.appendLog(ctx, currentState, `[stderr]\n${res.stderr.trim()}`, '31');
-              
-              if (res.exitCode !== 0) {
+            if (block.type === 'json' && block.code.includes('"mcp"')) {
+              try {
+                const mcpObj = JSON.parse(block.code);
+                const [serverName, toolName] = (mcpObj.mcp || '').split('/');
+                this.appendLog(ctx, currentState, `Invoking MCP Tool: ${mcpObj.mcp}`, '35');
+                
+                const mcpResult = await globalMcpClientManager.callTool(serverName, toolName || 'default', mcpObj.args || {});
+                this.appendLog(ctx, currentState, `[MCP Result]\n${JSON.stringify(mcpResult, null, 2)}`, '90');
+              } catch (e: any) {
                 allSucceeded = false;
-                ctx.lastErrorOutput = res.stderr || `Command '${line}' failed with exitCode ${res.exitCode}`;
-                this.appendLog(ctx, currentState, `Command failed: ${line}`, '31');
+                ctx.lastErrorOutput = `MCP Tool Execution Failed: ${e.message}`;
+                this.appendLog(ctx, currentState, ctx.lastErrorOutput, '31');
                 break;
+              }
+            } else {
+              // Process bash block line by line
+              const lines = block.code.split(/\r?\n/).map((l) => l.trim()).filter((l) => l && !l.startsWith('#'));
+              
+              for (const line of lines) {
+                this.appendLog(ctx, currentState, `Executing command: ${line}`, '90');
+                const res = await globalShellEngine.execute(line, execCtx.args);
+                
+                if (res.stdout) this.appendLog(ctx, currentState, `[stdout]\n${res.stdout.trim()}`, '90');
+                if (res.stderr) this.appendLog(ctx, currentState, `[stderr]\n${res.stderr.trim()}`, '31');
+                
+                if (res.exitCode !== 0) {
+                  allSucceeded = false;
+                  ctx.lastErrorOutput = res.stderr || `Command '${line}' failed with exitCode ${res.exitCode}`;
+                  this.appendLog(ctx, currentState, `Command failed: ${line}`, '31');
+                  break;
+                }
               }
             }
             if (!allSucceeded) break;

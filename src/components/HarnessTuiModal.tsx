@@ -43,7 +43,7 @@ export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
     try {
       const res = await globalHarnessEngine.executeSkill(content, ctx);
       if (res.stdout) {
-        res.stdout.split('\n').forEach((line) => line.trim() && addLog(line));
+        res.stdout.split('\n').forEach((line: string) => line.trim() && addLog(line));
       }
       if (res.exitCode === 0) {
         setCurrentState(HarnessState.SUCCESS);

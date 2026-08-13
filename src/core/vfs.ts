@@ -97,6 +97,17 @@ export class VirtualFileSystem {
       '# Earendel POSIX Microkernel AI Subsystem Configuration (/etc/llm.conf)\nPROVIDER=openai\nBASE_URL=https://api.openai.com/v1\nMODEL_NAME=gpt-4o-mini\nAPI_KEY=sk-your-api-key-here\nTIMEOUT_SEC=30\nENABLE_LOCAL_MOCK=auto\n'
     );
     this.writeFile(
+      '/etc/mcp.conf',
+      JSON.stringify({
+        mcpServers: {
+          fetch: {
+            url: "https://api.mcp-demo.com/sse",
+            description: "Web scraping and content retrieval tool"
+          }
+        }
+      }, null, 2) + '\n'
+    );
+    this.writeFile(
       '/var/log/syslog',
       'Aug  8 02:00:01 earendel systemd[1]: Starting System Logging Service...\nAug  8 02:00:01 earendel systemd[1]: Started System Logging Service.\nAug  8 02:00:02 earendel kernel: [    0.000000] Linux version 5.15.0-88-generic (buildd@bos02-amd64-035)\nAug  8 02:00:05 earendel login: hello logged in on tty1\n'
     );

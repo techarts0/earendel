@@ -36,6 +36,7 @@ import { ipcTraceCommand } from './ipcTraceCommand';
 import { kconfigCommands } from './kconfigCommands';
 import { agentListCommand, agentStartCommand, agentStopCommand, agentTestCommand } from './agentCommands';
 import { skillCommand } from './skillCommands';
+import { mcpCommand } from './mcpCommands';
 
 export function registerAllCommands(): void {
   const allSuites = [
@@ -78,6 +79,7 @@ export function registerAllCommands(): void {
     eccCommand,
     straceCommand,
     skillCommand,
+    mcpCommand,
   ];
 
   for (const cmd of allSuites) {

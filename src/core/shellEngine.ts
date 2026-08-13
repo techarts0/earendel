@@ -410,6 +410,20 @@ export class ShellEngine {
       return { stdout: (aiRes.response || aiRes.data || '') + '\n', stderr: '', exitCode: 0 };
     }
 
+    if (cmdName === '/dev/skill') {
+      const content = pipeInput || cmdArgs.join(' ');
+      const { globalHarnessEngine } = await import('./harnessEngine');
+      const ctx: ExecutionContext = {
+        vfs: globalVFS,
+        env: childEnv,
+        lang: this.lang,
+        args: cmdArgs,
+        pipeInput,
+        processManager: globalProcessManager,
+      };
+      return await globalHarnessEngine.executeSkill(content, ctx);
+    }
+
     if (cmdName === '/dev/null') {
       return { stdout: '', stderr: '', exitCode: 0 };
     }
