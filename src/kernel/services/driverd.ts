@@ -156,6 +156,87 @@ export class DriverDaemonService {
           isOpen: globalFramebufferEngine.getIsOpen(),
         };
 
+      case 'DEV_READ_GPU0': {
+        let isRealWebGPU = false;
+        if (typeof navigator !== 'undefined' && (navigator as any).gpu) {
+          isRealWebGPU = true;
+        }
+        return {
+          device: '/dev/gpu0',
+          adapter: isRealWebGPU ? 'WebGPU Native Hardware Acceleration' : 'WebGPU / WebGL 2.0 Hardware Accelerator',
+          vendor: isRealWebGPU ? 'Host GPU Adapter' : 'Apple M3 Pro / NVIDIA RTX 4090 (Virtual HAL)',
+          features: ['compute-shaders', 'float32-filterable', 'timestamp-query'],
+          limits: { maxComputeInvocationsPerWorkgroup: 1024, maxStorageBufferBindingSize: 1073741824 },
+          nativeWebGpuSupported: isRealWebGPU,
+        };
+      }
+
+      case 'DEV_READ_DSP':
+        return { device: '/dev/dsp', sampleRate: 44100, channels: 2, format: 'S16_LE', status: 'READY' };
+
+      case 'DEV_WRITE_DSP':
+        return { success: true, device: '/dev/dsp', bytesWritten: payload?.data?.length || 0 };
+
+      case 'DEV_READ_TTYUSB':
+        return { device: '/dev/ttyUSB0', baudRate: payload?.baud || 115200, status: 'CONNECTED', data: 'OK\r\n' };
+
+      case 'DEV_WRITE_TTYUSB':
+        return { success: true, device: '/dev/ttyUSB0', sentBytes: payload?.data?.length || 0 };
+
+      case 'DEV_READ_VIDEO0':
+        return { device: '/dev/video0', resolution: '1920x1080', fps: 30, format: 'YUYV', status: 'ACTIVE' };
+
+      case 'DEV_READ_GPS0': {
+        if (typeof navigator !== 'undefined' && navigator.geolocation) {
+          try {
+            const pos = await new Promise<GeolocationPosition>((resolve, reject) => {
+              navigator.geolocation.getCurrentPosition(resolve, reject, { timeout: 3000 });
+            });
+            return {
+              device: '/dev/gps0',
+              latitude: pos.coords.latitude,
+              longitude: pos.coords.longitude,
+              altitude: pos.coords.altitude || 0,
+              speed: pos.coords.speed || 0,
+              heading: pos.coords.heading || 0,
+              status: 'FIX_3D_REAL_GPS',
+            };
+          } catch (_) {}
+        }
+        return {
+          device: '/dev/gps0',
+          latitude: 37.774929,
+          longitude: -122.419416,
+          altitude: 15.2,
+          speed: 0.0,
+          heading: 0.0,
+          status: 'FIX_3D_VIRTUAL_MOCK',
+        };
+      }
+
+      case 'DEV_READ_NVME0N1':
+        return { device: '/dev/nvme0n1', capacityBytes: 64424509440, fsType: 'OPFS/IndexedDB Block Store' };
+
+      case 'DEV_READ_USB':
+        return {
+          device: '/dev/bus/usb/001/001',
+          devices: [
+            { idVendor: 0x1d6b, idProduct: 0x0003, name: 'Linux Foundation 3.0 root hub' },
+            { idVendor: 0x046d, idProduct: 0xc52b, name: 'Logitech USB Receiver' },
+          ],
+        };
+
+      case 'DEV_READ_BT0':
+        return { device: '/dev/bt0', status: 'POWERED_ON', address: 'AA:BB:CC:DD:EE:FF', name: 'Earendel BLE Controller' };
+
+      case 'DEV_GATEWAY_TUNNEL':
+        return {
+          device: '/dev/can0',
+          gatewayUrl: payload?.url || 'ws://localhost:9001',
+          tunnelStatus: 'ESTABLISHED',
+          ring0DirectIo: true,
+        };
+
       default:
         throw new Error(`[driverd Error] Unknown device driver action '${action}' received.`);
     }

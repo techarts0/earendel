@@ -508,6 +508,36 @@ export class VirtualFileSystem {
       return true;
     }
 
+    if (absPath === '/dev/ttyUSB0') {
+      import('../kernel/ipcBus').then(({ globalIPCBus }) => {
+        globalIPCBus.sendIPC(24, 'driverd', 'DEV_WRITE_TTYUSB', { data: content }).then((res) => {
+          const node = this.getNodeByPath('/dev/ttyUSB0');
+          if (node) node.content = `[Earendel HAL Web Serial UART (/dev/ttyUSB0)]\nLast Transmitted Payload (${content.length} bytes): ${content.trim()}\n`;
+        }).catch(() => {});
+      }).catch(() => {});
+      return true;
+    }
+
+    if (absPath === '/dev/dsp') {
+      import('../kernel/ipcBus').then(({ globalIPCBus }) => {
+        globalIPCBus.sendIPC(24, 'driverd', 'DEV_WRITE_DSP', { data: content }).then((res) => {
+          const node = this.getNodeByPath('/dev/dsp');
+          if (node) node.content = `[Earendel HAL Web Audio Synthesizer (/dev/dsp)]\nLast PCM Stream Output: ${content.length} bytes\n`;
+        }).catch(() => {});
+      }).catch(() => {});
+      return true;
+    }
+
+    if (absPath === '/dev/can0') {
+      import('../kernel/ipcBus').then(({ globalIPCBus }) => {
+        globalIPCBus.sendIPC(24, 'driverd', 'DEV_GATEWAY_TUNNEL', { url: content.trim() }).then((res) => {
+          const node = this.getNodeByPath('/dev/can0');
+          if (node) node.content = `[Earendel HAL Hardware Gateway CAN Bus (/dev/can0)]\nTunnel Status: ${res.tunnelStatus || 'CONNECTED'} -> ${content.trim()}\n`;
+        }).catch(() => {});
+      }).catch(() => {});
+      return true;
+    }
+
     if (globalHostMountEngine.getMatchingMount(absPath)) {
       globalHostMountEngine.writeFile(absPath, content);
     }
@@ -743,14 +773,57 @@ export class VirtualFileSystem {
         });
       };
 
-      ['null', 'zero', 'urandom', 'random', 'tty', 'ai', 'skill'].forEach((f) => mkDevChild(f, 'file'));
-      ['pts', 'net'].forEach((d) => mkDevChild(d, 'directory'));
+      ['null', 'zero', 'urandom', 'random', 'tty', 'ai', 'skill', 'gpu0', 'dsp', 'ttyUSB0', 'video0', 'gps0', 'nvme0n1', 'bt0', 'can0'].forEach((f) => mkDevChild(f, 'file'));
+      ['pts', 'net', 'bus'].forEach((d) => mkDevChild(d, 'directory'));
       mkDevChild('stdin', 'symlink', '/proc/self/fd/0');
       mkDevChild('stdout', 'symlink', '/proc/self/fd/1');
       mkDevChild('stderr', 'symlink', '/proc/self/fd/2');
 
       devDirNode.children = childrenMap;
       return devDirNode;
+    }
+
+    if (cleanPath === '/dev/bus' || cleanPath === '/dev/bus/usb' || cleanPath === '/dev/bus/usb/001') {
+      const usbChildren = new Map<string, VFSNode>();
+      const usbNode: VFSNode = { id: 'dev_bus_usb_001', name: '001', type: 'directory', permissions: 'r-xr-xr-x', owner: 'root', group: 'root', size: 4096, updatedAt: new Date(), children: usbChildren, parent: devDirNode };
+      usbChildren.set('001', { id: 'dev_bus_usb_001_001', name: '001', type: 'file', permissions: 'rw-rw-r--', owner: 'root', group: 'usb', size: 32, updatedAt: new Date(), content: '[WebUSB Root Controller (/dev/bus/usb/001/001)]\n', parent: usbNode });
+      return usbNode;
+    }
+
+    if (cleanPath === '/dev/bus/usb/001/001') {
+      return { id: 'dev_bus_usb_001_001', name: '001', type: 'file', permissions: 'rw-rw-r--', owner: 'root', group: 'usb', size: 32, updatedAt: new Date(), content: '[WebUSB Root Controller (/dev/bus/usb/001/001)]\n', parent: devDirNode };
+    }
+
+    if (cleanPath === '/dev/gpu0') {
+      return { id: 'dev_gpu0', name: 'gpu0', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'video', size: 0, updatedAt: new Date(), content: '[Earendel HAL WebGPU/WebGL Accelerator (/dev/gpu0)]\n', parent: devDirNode };
+    }
+
+    if (cleanPath === '/dev/dsp') {
+      return { id: 'dev_dsp', name: 'dsp', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'audio', size: 0, updatedAt: new Date(), content: '[Earendel HAL Web Audio Synthesizer (/dev/dsp)]\n', parent: devDirNode };
+    }
+
+    if (cleanPath === '/dev/ttyUSB0') {
+      return { id: 'dev_ttyUSB0', name: 'ttyUSB0', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'dialout', size: 0, updatedAt: new Date(), content: '[Earendel HAL Web Serial UART (/dev/ttyUSB0)]\n', parent: devDirNode };
+    }
+
+    if (cleanPath === '/dev/video0') {
+      return { id: 'dev_video0', name: 'video0', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'video', size: 0, updatedAt: new Date(), content: '[Earendel HAL Media Capture Webcam (/dev/video0)]\n', parent: devDirNode };
+    }
+
+    if (cleanPath === '/dev/gps0') {
+      return { id: 'dev_gps0', name: 'gps0', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'tty', size: 0, updatedAt: new Date(), content: '37.774929,-122.419416,15.2,FIX_3D\n', parent: devDirNode };
+    }
+
+    if (cleanPath === '/dev/nvme0n1') {
+      return { id: 'dev_nvme0n1', name: 'nvme0n1', type: 'file', permissions: 'rw-rw----', owner: 'root', group: 'disk', size: 64424509440, updatedAt: new Date(), content: '[Earendel HAL OPFS Block Storage (/dev/nvme0n1)]\n', parent: devDirNode };
+    }
+
+    if (cleanPath === '/dev/bt0') {
+      return { id: 'dev_bt0', name: 'bt0', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'bluetooth', size: 0, updatedAt: new Date(), content: '[Earendel HAL Web Bluetooth LE (/dev/bt0)]\n', parent: devDirNode };
+    }
+
+    if (cleanPath === '/dev/can0') {
+      return { id: 'dev_can0', name: 'can0', type: 'file', permissions: 'rw-rw-rw-', owner: 'root', group: 'netdev', size: 0, updatedAt: new Date(), content: '[Earendel HAL Hardware Gateway CAN Bus (/dev/can0)]\n', parent: devDirNode };
     }
 
     if (cleanPath === '/dev/net') {

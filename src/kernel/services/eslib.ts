@@ -63,6 +63,17 @@ export const ESLIB_SOURCE_CODE = `// Earendel System Library (eslib.js v1.0.0)
       gethostbyname: function(hostname) {
         return global.syscall ? global.syscall(33, hostname) : null;
       }
+    },
+    hal: {
+      getGps: function() {
+        return global.syscall ? global.syscall(2, '/dev/gps0', 'r') : null;
+      },
+      readGpuInfo: function() {
+        return global.syscall ? global.syscall(2, '/dev/gpu0', 'r') : null;
+      },
+      connectGateway: function(wsUrl) {
+        return { status: 'ESTABLISHED', gateway: wsUrl || 'ws://localhost:9001' };
+      }
     }
   };
 

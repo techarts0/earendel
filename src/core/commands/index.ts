@@ -37,6 +37,7 @@ import { kconfigCommands } from './kconfigCommands';
 import { agentListCommand, agentStartCommand, agentStopCommand, agentTestCommand } from './agentCommands';
 import { skillCommand } from './skillCommands';
 import { mcpCommand } from './mcpCommands';
+import { halCommands } from './halCommands';
 
 export function registerAllCommands(): void {
   const allSuites = [
@@ -80,6 +81,7 @@ export function registerAllCommands(): void {
     straceCommand,
     skillCommand,
     mcpCommand,
+    ...halCommands,
   ];
 
   for (const cmd of allSuites) {
