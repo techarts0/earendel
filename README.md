@@ -121,7 +121,7 @@ Visit **[earendel.techarts.cn](https://earendel.techarts.cn)** — no install, n
 Or run locally:
 
 ```bash
-git clone https://github.com/nickshen/earendel.git
+git clone https://github.com/techarts0/earendel.git
 cd earendel
 npm install
 npm run dev
