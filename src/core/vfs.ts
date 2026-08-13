@@ -88,10 +88,13 @@ export class VirtualFileSystem {
     this.mkdir('/var/lib/dpkg', true);
     this.mkdir('/var/lib/dpkg/info', true);
 
+    this.mkdir('/dev/net', true);
     this.writeFile('/dev/null', '');
     this.writeFile('/dev/zero', '');
     this.writeFile('/dev/ai', '[Earendel AI Character Device Driver (/dev/ai)]\nStatus: ONLINE (Device Major 10, Minor 250)\nUsage: echo "prompt" > /dev/ai OR cat syslog | /dev/ai\n');
     this.writeFile('/dev/skill', '[Earendel Harness-Skill Engine (/dev/skill)]\nStatus: ONLINE\nUsage: cat skill.md | /dev/skill\n');
+    this.writeFile('/dev/net/fetch', '[Earendel POSIX Network Fetch Device (/dev/net/fetch)]\nUsage: echo "https://api.github.com/zen" > /dev/net/fetch\n');
+    this.writeFile('/dev/net/dns', '[Earendel POSIX DoH DNS Device (/dev/net/dns)]\nUsage: echo "openai.com" > /dev/net/dns\n');
     this.writeFile(
       '/etc/llm.conf',
       '# Earendel POSIX Microkernel AI Subsystem Configuration (/etc/llm.conf)\nPROVIDER=openai\nBASE_URL=https://api.openai.com/v1\nMODEL_NAME=gpt-4o-mini\nAPI_KEY=sk-your-api-key-here\nTIMEOUT_SEC=30\nENABLE_LOCAL_MOCK=auto\n'
@@ -474,6 +477,32 @@ export class VirtualFileSystem {
             const skillNode = this.getNodeByPath('/dev/skill');
             if (skillNode) skillNode.content = res.response;
           }
+        }).catch(() => { });
+      }).catch(() => { });
+      return true;
+    }
+
+    if (absPath === '/dev/net/fetch') {
+      const url = content.trim();
+      import('../kernel/syscall').then(({ syscall }) => {
+        import('../kernel/types').then(({ SyscallNo }) => {
+          syscall(SyscallNo.SYS_NET_FETCH, url).then((res) => {
+            const fetchNode = this.getNodeByPath('/dev/net/fetch');
+            if (fetchNode) fetchNode.content = res.data?.body || res.error || '';
+          }).catch(() => { });
+        }).catch(() => { });
+      }).catch(() => { });
+      return true;
+    }
+
+    if (absPath === '/dev/net/dns') {
+      const hostname = content.trim();
+      import('../kernel/syscall').then(({ syscall }) => {
+        import('../kernel/types').then(({ SyscallNo }) => {
+          syscall(SyscallNo.SYS_NET_RESOLVE, hostname).then((res) => {
+            const dnsNode = this.getNodeByPath('/dev/net/dns');
+            if (dnsNode) dnsNode.content = `${hostname} -> ${res.data?.ip || '104.21.55.1'}\n`;
+          }).catch(() => { });
         }).catch(() => { });
       }).catch(() => { });
       return true;

@@ -186,4 +186,39 @@ export const netCommands: Command[] = [
       return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
     },
   },
+  {
+    name: 'curl',
+    description: 'transfer a URL via Earendel Unified Network Subsystem (Syscall #30)',
+    category: 'net',
+    execute: async (ctx) => {
+      const url = ctx.args[0];
+      if (!url) {
+        return { stdout: '', stderr: "curl: try 'curl --help' or 'curl <url>' for more information\n", exitCode: 2 };
+      }
+
+      const { eslibNet } = await import('../eslibNet');
+      const res = await eslibNet.fetch(url);
+
+      if (res && res.body) {
+        return { stdout: res.body + '\n', stderr: '', exitCode: 0 };
+      }
+
+      return { stdout: '', stderr: `curl: (7) Failed to connect to ${url}: ${res?.error || 'Unknown error'}\n`, exitCode: 7 };
+    },
+  },
+  {
+    name: 'fetch',
+    description: 'alias for curl / eslib.net.fetch',
+    category: 'net',
+    execute: async (ctx) => {
+      const url = ctx.args[0];
+      if (!url) {
+        return { stdout: '', stderr: 'Usage: fetch <url>\n', exitCode: 1 };
+      }
+
+      const { eslibNet } = await import('../eslibNet');
+      const res = await eslibNet.fetch(url);
+      return { stdout: (res?.body || res?.error || '') + '\n', stderr: '', exitCode: res?.ok ? 0 : 1 };
+    },
+  },
 ];

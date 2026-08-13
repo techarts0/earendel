@@ -49,6 +49,20 @@ export const ESLIB_SOURCE_CODE = `// Earendel System Library (eslib.js v1.0.0)
       malloc: function(sizeBytes) {
         return { ptr: Math.floor(Math.random() * 0x100000), size: sizeBytes };
       }
+    },
+    net: {
+      fetch: function(url, opts) {
+        return global.syscall ? global.syscall(30, url, opts || {}) : null;
+      },
+      socket: function(url, type) {
+        return global.syscall ? global.syscall(31, url, type || 'ws') : null;
+      },
+      listen: function(port) {
+        return global.syscall ? global.syscall(32, port) : null;
+      },
+      gethostbyname: function(hostname) {
+        return global.syscall ? global.syscall(33, hostname) : null;
+      }
     }
   };
 

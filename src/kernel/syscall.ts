@@ -1,6 +1,7 @@
 import { SyscallNo, SyscallResult } from './types';
 import { globalIPCBus } from './ipcBus';
 import { globalKernelAgentManager } from './agentFramework';
+import './services/netd';
 
 export interface SyscallTraceEntry {
   sysNo: SyscallNo;
@@ -137,6 +138,38 @@ export async function syscall(sysNo: SyscallNo, ...args: any[]): Promise<Syscall
         const res = await globalIPCBus.sendIPC(exitPid || currentCallerPid, 'pmd', 'SYS_EXIT', {});
         result = { code: 0, data: res.terminated };
         formattedRet = '?';
+        break;
+      }
+
+      case SyscallNo.SYS_NET_FETCH: {
+        const [url, opts] = args;
+        const res = await globalIPCBus.sendIPC(currentCallerPid, 'netd', 'SYS_NET_FETCH', { url, ...(opts || {}) });
+        result = { code: res.ok ? 0 : -1, data: res };
+        formattedRet = res.status ? res.status.toString() : '-1';
+        break;
+      }
+
+      case SyscallNo.SYS_NET_SOCKET: {
+        const [url, socketType] = args;
+        const res = await globalIPCBus.sendIPC(currentCallerPid, 'netd', 'SYS_NET_SOCKET', { url, type: socketType });
+        result = { code: 0, data: res };
+        formattedRet = res.socketId || '0';
+        break;
+      }
+
+      case SyscallNo.SYS_NET_LISTEN: {
+        const [port] = args;
+        const res = await globalIPCBus.sendIPC(currentCallerPid, 'netd', 'SYS_NET_LISTEN', { port });
+        result = { code: 0, data: res };
+        formattedRet = res.peerId || '0';
+        break;
+      }
+
+      case SyscallNo.SYS_NET_RESOLVE: {
+        const [hostname] = args;
+        const res = await globalIPCBus.sendIPC(currentCallerPid, 'netd', 'SYS_NET_RESOLVE', { hostname });
+        result = { code: 0, data: res };
+        formattedRet = res.ip || '0';
         break;
       }
 
