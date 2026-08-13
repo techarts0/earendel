@@ -16,7 +16,7 @@ export function highlightCommandLine(cmdStr: string): string {
         isFirstToken = true; // Next token after pipe/operator will be command name!
         return `\x1b[1;35m${token}\x1b[0m`;
       }
-      // 3. Flags / Options: -a, -la, --max, -h
+      // 3. Flags / Options: -a, -la, -h
       if (token.startsWith('-')) {
         return `\x1b[1;33m${token}\x1b[0m`;
       }

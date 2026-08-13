@@ -112,8 +112,8 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
       showUbuntuWelcome();
     } else {
       term.writeln('\x1b[1;36mEarendel: An AI Native Microkernel OS on V8\x1b[0m');
-      term.writeln('\x1b[90mhttps://github.com/techarts0/earendel\x1b[0m');
-      term.writeln('\x1b[90mDefault users: \x1b[33mhello or root\x1b[90m, password: \x1b[33m123456\x1b[0m\n');
+      term.writeln('\x1b[90mSource: https://github.com/techarts0/earendel\x1b[0m');
+      term.writeln('\x1b[90mDefault users: \x1b[33mhello \x1b[90mor \x1b[33mroot\x1b[90m, password: \x1b[33m123456\x1b[0m\n');
       term.write('earendel login: ');
     }
 
@@ -262,8 +262,8 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
               isInitialBootLoginRef.current = true;
               term.reset();
               term.writeln('\x1b[1;36mEarendel: An AI Native Microkernel OS on V8\x1b[0m');
-              term.writeln('\x1b[90mhttps://github.com/techarts0/earendel\x1b[0m');
-              term.writeln('\x1b[90mDefault users: \x1b[33mhello or root\x1b[90m, password: \x1b[33m123456\x1b[0m\n');
+              term.writeln('\x1b[90mSource: https://github.com/techarts0/earendel\x1b[0m');
+              term.writeln('\x1b[90mDefault users: \x1b[33mhello \x1b[90mor \x1b[33mroot\x1b[90m, password: \x1b[33m123456\x1b[0m\n');
               term.write('earendel login: ');
               return;
             }

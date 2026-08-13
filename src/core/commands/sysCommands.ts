@@ -373,10 +373,10 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
   },
   {
     name: 'resize',
-    description: 'Set environment variables to reflect current window size (resize --max for fullscreen)',
+    description: 'Set environment variables to reflect current window size (resize max for fullscreen)',
     category: 'sys',
     execute: (ctx) => {
-      const isMax = ctx.args.includes('--max');
+      const isMax = ctx.args.includes('max');
       return {
         stdout: isMax ? 'COLUMNS=160; LINES=48; export COLUMNS LINES;\n' : 'COLUMNS=120; LINES=32; export COLUMNS LINES;\n',
         stderr: '',
