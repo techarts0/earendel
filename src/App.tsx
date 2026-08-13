@@ -4,14 +4,16 @@ import { NanoEditorModal } from './components/NanoEditorModal';
 import { ViEditorModal } from './components/ViEditorModal';
 import { HarnessTuiModal } from './components/HarnessTuiModal';
 import { CheatSheetModal } from './components/CheatSheetModal';
-
 import { FramebufferModal } from './components/FramebufferModal';
+import { HarnessDagModal } from './components/HarnessDagModal';
 
 export function App() {
   const [nanoModal, setNanoModal] = useState<{ path: string; content: string } | null>(null);
   const [viModal, setViModal] = useState<{ path: string; content: string } | null>(null);
   const [harnessTuiModal, setHarnessTuiModal] = useState<{ path: string; content: string } | null>(null);
+  const [dagModalData, setDagModalData] = useState<{ path: string } | null>(null);
   const [showCheatModal, setShowCheatModal] = useState(false);
+  const [showDagModal, setShowDagModal] = useState(false);
   const [tmuxSplit, setTmuxSplit] = useState<'none' | 'v' | 'h'>('none');
 
   const handleSplitTmux = (type: 'v' | 'h' | 'exit') => {
@@ -23,7 +25,7 @@ export function App() {
   };
 
   return (
-    <div className="w-screen h-screen m-0 p-0 overflow-hidden bg-[#000000] select-none">
+    <div className="w-screen h-screen m-0 p-0 overflow-hidden bg-[#000000] select-none relative">
       {/* Tmux Window Multiplexer Container */}
       <div
         style={{
@@ -39,6 +41,10 @@ export function App() {
             onOpenNano={(data) => setNanoModal(data)}
             onOpenVi={(data) => setViModal(data)}
             onOpenHarnessTui={(data) => setHarnessTuiModal(data)}
+            onOpenHarnessDag={(data) => {
+              setDagModalData(data);
+              setShowDagModal(true);
+            }}
             onOpenCheat={() => setShowCheatModal(true)}
             onSplitTmux={handleSplitTmux}
           />
@@ -61,12 +67,23 @@ export function App() {
               onOpenNano={(data) => setNanoModal(data)}
               onOpenVi={(data) => setViModal(data)}
               onOpenHarnessTui={(data) => setHarnessTuiModal(data)}
+              onOpenHarnessDag={(data) => {
+                setDagModalData(data);
+                setShowDagModal(true);
+              }}
               onOpenCheat={() => setShowCheatModal(true)}
               onSplitTmux={handleSplitTmux}
             />
           </div>
         )}
       </div>
+
+      {/* Harness Skill Visual DAG Flow Canvas Modal */}
+      <HarnessDagModal
+        isOpen={showDagModal}
+        skillFilePath={dagModalData?.path || '/skills/demo.md'}
+        onClose={() => setShowDagModal(false)}
+      />
 
       {/* Nano Editor Trigger */}
       {nanoModal && (

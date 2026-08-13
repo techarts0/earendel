@@ -19,6 +19,7 @@ export interface ExecutionResult {
   openNano?: { path: string; content: string };
   openVi?: { path: string; content: string };
   openHarnessTui?: { path: string; content: string };
+  openHarnessDag?: { path: string };
   loginPrompt?: { username: string };
   sudoPrompt?: { username: string; commandLine: string };
   toggleFullscreen?: 'max' | 'restore';

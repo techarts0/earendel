@@ -136,6 +136,36 @@ export class TaskScheduler {
       cwd: '/',
       isKernelDaemon: true,
     });
+
+    // PID 7: /usr/bin/waylandd (Earendel-Wayland Display Compositor Daemon)
+    this.createProcess({
+      pid: 7,
+      ppid: 1,
+      name: '/usr/bin/waylandd',
+      user: 'root',
+      state: 'RUNNING',
+      startTime: new Date(),
+      vszKB: 58000,
+      rssKB: 21000,
+      cpuUsagePercent: 0.2,
+      cwd: '/',
+      isKernelDaemon: true,
+    });
+
+    // PID 9: /lib/systemd/systemd-networkd (Network Subsystem Daemon)
+    this.createProcess({
+      pid: 9,
+      ppid: 1,
+      name: '[netd]',
+      user: 'root',
+      state: 'RUNNING',
+      startTime: new Date(),
+      vszKB: 24000,
+      rssKB: 10000,
+      cpuUsagePercent: 0.1,
+      cwd: '/',
+      isKernelDaemon: true,
+    });
   }
 
   public createProcess(pcb: ProcessControlBlock): ProcessControlBlock {

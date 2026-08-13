@@ -38,6 +38,7 @@ import { agentListCommand, agentStartCommand, agentStopCommand, agentTestCommand
 import { skillCommand } from './skillCommands';
 import { mcpCommand } from './mcpCommands';
 import { halCommands } from './halCommands';
+import { guiCommands } from './guiCommands';
 
 export function registerAllCommands(): void {
   const allSuites = [
@@ -82,6 +83,7 @@ export function registerAllCommands(): void {
     skillCommand,
     mcpCommand,
     ...halCommands,
+    ...guiCommands,
   ];
 
   for (const cmd of allSuites) {

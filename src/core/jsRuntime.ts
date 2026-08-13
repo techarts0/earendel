@@ -3,6 +3,7 @@ import { syscall } from '../kernel/syscall';
 import { SyscallNo } from '../kernel/types';
 import { globalVMPageTable } from '../kernel/vmPageTable';
 import { globalKernelAgentManager } from '../kernel/agentFramework';
+import { globalIPCBus } from '../kernel/ipcBus';
 
 export class JsRuntimeEngine {
   /**
@@ -36,11 +37,16 @@ export class JsRuntimeEngine {
     };
 
     try {
-      const runnerCode = [
-        cleanCodeStr,
-        'if (typeof main === "function") return main(ctx, eslib);',
-        'if (typeof execute === "function") return execute(ctx, eslib);',
-      ].join('\n');
+      const runnerCode = `
+        return (async () => {
+          const __res = eval(${JSON.stringify(cleanCodeStr)});
+          if (__res && typeof __res.then === 'function') {
+            await __res;
+          }
+          if (typeof main === "function") await main(ctx, eslib);
+          if (typeof execute === "function") return await execute(ctx, eslib);
+        })();
+      `;
 
       // Evaluate JS closure bundle passing ExecutionContext, eslib, syscall and custom console
       const runner = new Function(
@@ -219,6 +225,23 @@ export class JsRuntimeEngine {
             return globalKernelAgentManager.dispatchObservation(source as any, event, payload);
           },
         },
+        wayland: {
+          createSurface: async (opts?: any) => {
+            return await globalIPCBus.sendIPC(7, 'waylandd', 'SYS_WAYLAND_CREATE_SURFACE', opts || {});
+          },
+          destroySurface: async (id: string) => {
+            return await globalIPCBus.sendIPC(7, 'waylandd', 'SYS_WAYLAND_DESTROY_SURFACE', { id });
+          },
+          focusSurface: async (id: string) => {
+            return await globalIPCBus.sendIPC(7, 'waylandd', 'SYS_WAYLAND_FOCUS_SURFACE', { id });
+          },
+          listSurfaces: async () => {
+            return await globalIPCBus.sendIPC(7, 'waylandd', 'SYS_WAYLAND_LIST_SURFACES', {});
+          },
+          flushFramebuffer: async (id: string, bytesWritten?: number) => {
+            return await globalIPCBus.sendIPC(7, 'waylandd', 'SYS_WAYLAND_FLUSH_FRAMEBUFFER', { id, bytesWritten });
+          },
+        },
       };
 
       const res = await runner(
@@ -229,20 +252,17 @@ export class JsRuntimeEngine {
         eslibObj
       );
 
-      if (res && typeof res === 'object') {
-        await syscall(SyscallNo.SYS_EXIT, childPid);
-        const finalStdout = res.stdout || stdoutBuffer;
-        const debugDump = finalStdout.trim() ? finalStdout : `\x1b[33m[jsRuntime Debug]: Bundle executed (exitCode: 0), but no stdout was generated.\x1b[0m\n\x1b[90mExecuted Code:\n${cleanCodeStr}\x1b[0m\n`;
-        return {
-          stdout: debugDump,
-          stderr: res.stderr || stderrBuffer,
-          exitCode: typeof res.exitCode === 'number' ? res.exitCode : 0,
-        };
-      }
-
       await syscall(SyscallNo.SYS_EXIT, childPid);
-      const debugDump = stdoutBuffer.trim() ? stdoutBuffer : `\x1b[33m[jsRuntime Debug]: Bundle executed (exitCode: 0), but no stdout was generated.\x1b[0m\n\x1b[90mExecuted Code:\n${cleanCodeStr}\x1b[0m\n`;
-      return { stdout: debugDump, stderr: stderrBuffer, exitCode: 0 };
+
+      const finalStdout = (res && typeof res === 'object' && res.stdout) ? res.stdout : stdoutBuffer;
+      const finalStderr = (res && typeof res === 'object' && res.stderr) ? res.stderr : stderrBuffer;
+      const finalExitCode = (res && typeof res === 'object' && typeof res.exitCode === 'number') ? res.exitCode : 0;
+
+      return {
+        stdout: finalStdout,
+        stderr: finalStderr,
+        exitCode: finalExitCode,
+      };
     } catch (e: any) {
       await syscall(SyscallNo.SYS_EXIT, childPid);
       return {

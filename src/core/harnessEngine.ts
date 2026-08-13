@@ -5,6 +5,7 @@ import { globalShellEngine } from './shellEngine';
 import { globalMcpClientManager } from './mcpClient';
 
 export enum HarnessState {
+  IDLE = 'IDLE',
   PARSE = 'PARSE',
   INFER = 'INFER',
   ACT = 'ACT',
@@ -121,7 +122,7 @@ Important: Output valid bash lines or JSON MCP tool calls. Keep instructions min
           
           try {
             const promptContext = ctx.conversationHistory.join('\n\n');
-            const res = await globalIPCBus.sendIPC(24, 'driverd', 'DEV_WRITE_AI', { prompt: promptContext });
+            const res = await globalIPCBus.sendIPC(4, 'driverd', 'DEV_WRITE_AI', { prompt: promptContext });
             const aiResponse = res.response || res.data || '';
             
             ctx.conversationHistory.push(`AI Response:\n${aiResponse}`);

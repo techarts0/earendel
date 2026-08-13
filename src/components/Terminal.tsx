@@ -16,12 +16,13 @@ interface TerminalProps {
   onOpenNano?: (opts: { path: string; content: string }) => void;
   onOpenVi?: (opts: { path: string; content: string }) => void;
   onOpenHarnessTui?: (opts: { path: string; content: string }) => void;
+  onOpenHarnessDag?: (opts: { path: string }) => void;
   onOpenCheat?: () => void;
   onSplitTmux?: (type: 'v' | 'h' | 'exit') => void;
   skipBootScreen?: boolean;
 }
 
-export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpenHarnessTui, onOpenCheat, onSplitTmux, skipBootScreen }) => {
+export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpenHarnessTui, onOpenHarnessDag, onOpenCheat, onSplitTmux, skipBootScreen }) => {
   const terminalRef = useRef<HTMLDivElement>(null);
   const xtermRef = useRef<XTerminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
@@ -279,6 +280,10 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
               onOpenHarnessTui(res.openHarnessTui);
             }
 
+            if (res.openHarnessDag && onOpenHarnessDag) {
+              onOpenHarnessDag(res.openHarnessDag);
+            }
+
             if (res.openCheat && onOpenCheat) {
               onOpenCheat();
             }
@@ -454,6 +459,15 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
       safeFit();
     };
 
+    const resizeObserver = new ResizeObserver(() => {
+      requestAnimationFrame(() => {
+        safeFit();
+      });
+    });
+    if (terminalRef.current) {
+      resizeObserver.observe(terminalRef.current);
+    }
+
     const handleThemeChange = (e: Event) => {
       const themeName = (e as CustomEvent).detail;
       if (THEME_PRESETS[themeName]) {
@@ -467,6 +481,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
     return () => {
       clearTimeout(timer);
       disposable.dispose();
+      resizeObserver.disconnect();
       window.removeEventListener('resize', handleResize);
       window.removeEventListener('earendel:theme-changed', handleThemeChange);
       term.dispose();
@@ -474,8 +489,8 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
   }, []);
 
   return (
-    <div className="w-full h-full p-0 overflow-hidden bg-transparent">
-      <div ref={terminalRef} className="w-full h-full" />
+    <div style={{ width: '100%', height: '100%', minHeight: '100vh', display: 'flex', flexDirection: 'column', flex: 1, padding: 0, margin: 0, overflow: 'hidden', backgroundColor: 'transparent' }}>
+      <div ref={terminalRef} style={{ width: '100%', height: '100%', flex: 1 }} />
     </div>
   );
 };

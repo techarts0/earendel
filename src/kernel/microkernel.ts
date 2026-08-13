@@ -11,6 +11,8 @@ import { globalIPCSharedMem } from './ipcSharedMem';
 import { globalKAgentDaemon } from './services/kagentd';
 import { globalCapAgentDaemon } from './services/capAgentd';
 import { globalKernelAgentManager } from './agentFramework';
+import { globalNetworkDaemon } from './services/netd';
+import { globalWaylandDaemon } from './services/waylandd';
 
 export interface KernelDmesgLog {
   timestamp: string;
@@ -35,6 +37,8 @@ export class Microkernel {
     this.log('kernel', 'Registering User-space Device Driver Daemon (driverd, PID 4)...', 'info');
     this.log('kernel', 'Registering Kernel Crash Self-Healing Daemon (kagentd, PID 5)...', 'info');
     this.log('kernel', 'Registering Kernel AI Capability Intent Firewall (capAgentd, PID 6)...', 'info');
+    this.log('kernel', 'Registering Earendel-Wayland Display Compositor Daemon (waylandd, PID 7)...', 'info');
+    this.log('kernel', 'Registering Network Subsystem Daemon (netd, PID 9)...', 'info');
 
     // Ensure Daemons and Bridges are initialized
     const _vfs = globalVFSDaemon;
@@ -42,6 +46,8 @@ export class Microkernel {
     const _driver = globalDriverDaemon;
     const _kagent = globalKAgentDaemon;
     const _capagent = globalCapAgentDaemon;
+    const _netd = globalNetworkDaemon;
+    const _waylandd = globalWaylandDaemon;
     const _bridge = globalWorkerIPCBridge;
     const _mod = globalModuleManager;
     const _vm = globalVMPageTable;

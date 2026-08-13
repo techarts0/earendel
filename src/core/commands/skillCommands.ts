@@ -12,6 +12,7 @@ export const skillCommand: Command = {
 
     let filePath = ctx.args[0];
     let isTui = false;
+    let isDag = false;
 
     if (filePath === 'tui') {
       isTui = true;
@@ -19,6 +20,9 @@ export const skillCommand: Command = {
       if (!filePath) {
         return { stdout: '', stderr: 'Usage: skill tui <file.md>\n', exitCode: 1 };
       }
+    } else if (filePath === 'dag') {
+      isDag = true;
+      filePath = ctx.args[1] || '/skills/demo.md';
     }
 
     const node = ctx.vfs.getNodeByPath(filePath);
@@ -35,6 +39,15 @@ export const skillCommand: Command = {
         stderr: '',
         exitCode: 0,
         openHarnessTui: { path: filePath, content },
+      };
+    }
+
+    if (isDag) {
+      return {
+        stdout: `\x1b[36m[HarnessEngine]\x1b[0m Opening Visual DAG Flow Canvas for ${filePath}...\n`,
+        stderr: '',
+        exitCode: 0,
+        openHarnessDag: { path: filePath },
       };
     }
     

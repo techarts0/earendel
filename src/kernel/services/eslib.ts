@@ -74,6 +74,17 @@ export const ESLIB_SOURCE_CODE = `// Earendel System Library (eslib.js v1.0.0)
       connectGateway: function(wsUrl) {
         return { status: 'ESTABLISHED', gateway: wsUrl || 'ws://localhost:9001' };
       }
+    },
+    wayland: {
+      createSurface: function(opts) {
+        return global.syscall ? global.syscall(7, 'SYS_WAYLAND_CREATE_SURFACE', opts || {}) : null;
+      },
+      destroySurface: function(id) {
+        return global.syscall ? global.syscall(7, 'SYS_WAYLAND_DESTROY_SURFACE', { id: id }) : null;
+      },
+      listSurfaces: function() {
+        return global.syscall ? global.syscall(7, 'SYS_WAYLAND_LIST_SURFACES', {}) : null;
+      }
     }
   };
 

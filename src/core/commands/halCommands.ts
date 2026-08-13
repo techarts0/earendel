@@ -6,7 +6,7 @@ export const lspciCommand: Command = {
   description: 'list all PCI devices mapped by Earendel HAL',
   category: 'sys',
   execute: async (): Promise<ExecutionResult> => {
-    const res = await globalIPCBus.sendIPC(24, 'driverd', 'DEV_READ_GPU0', {});
+    const res = await globalIPCBus.sendIPC(4, 'driverd', 'DEV_READ_GPU0', {});
     const out = [
       '00:00.0 Host bridge: Intel Corporation 13th Gen Core Processor Host Bridge/DRAM Registers (rev 02)',
       '00:01.0 PCI bridge: Intel Corporation 13th Gen Core Processor PCI Express x16 Controller #1 (rev 02)',
@@ -24,7 +24,7 @@ export const lsusbCommand: Command = {
   description: 'list USB devices enumerated via WebUSB HAL driver',
   category: 'sys',
   execute: async (): Promise<ExecutionResult> => {
-    const res = await globalIPCBus.sendIPC(24, 'driverd', 'DEV_READ_USB', {});
+    const res = await globalIPCBus.sendIPC(4, 'driverd', 'DEV_READ_USB', {});
     const devs = res.devices || [];
     let out = `Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub\n`;
     devs.forEach((d: any, idx: number) => {
@@ -62,9 +62,9 @@ export const lshwCommand: Command = {
   description: 'list hardware configuration and HAL device mappings',
   category: 'sys',
   execute: async (): Promise<ExecutionResult> => {
-    const gpu = await globalIPCBus.sendIPC(24, 'driverd', 'DEV_READ_GPU0', {});
-    const gps = await globalIPCBus.sendIPC(24, 'driverd', 'DEV_READ_GPS0', {});
-    const nvme = await globalIPCBus.sendIPC(24, 'driverd', 'DEV_READ_NVME0N1', {});
+    const gpu = await globalIPCBus.sendIPC(4, 'driverd', 'DEV_READ_GPU0', {});
+    const gps = await globalIPCBus.sendIPC(4, 'driverd', 'DEV_READ_GPS0', {});
+    const nvme = await globalIPCBus.sendIPC(4, 'driverd', 'DEV_READ_NVME0N1', {});
 
     const out = [
       'earendel-workstation',
@@ -101,7 +101,7 @@ export const gpsCommand: Command = {
   description: 'read live GPS coordinates from /dev/gps0 HAL driver',
   category: 'sys',
   execute: async (): Promise<ExecutionResult> => {
-    const res = await globalIPCBus.sendIPC(24, 'driverd', 'DEV_READ_GPS0', {});
+    const res = await globalIPCBus.sendIPC(4, 'driverd', 'DEV_READ_GPS0', {});
     const out = [
       `\x1b[36m[Earendel HAL GPS Receiver (/dev/gps0)]\x1b[0m`,
       `Latitude:   ${res.latitude}° N`,

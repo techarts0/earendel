@@ -1,5 +1,5 @@
-// Earendel Framebuffer Display Engine (/dev/fb0 & /dev/display)
 import { globalVFS } from './vfs';
+import { globalIPCBus } from '../kernel/ipcBus';
 
 export interface FramebufferConfig {
   width: number;
@@ -55,6 +55,9 @@ export class FramebufferEngine {
 
   public closeWindow() {
     this.isWindowOpen = false;
+    try {
+      globalIPCBus.sendIPC(24, 'waylandd', 'SYS_WAYLAND_DESTROY_SURFACE', { id: 'all' });
+    } catch (_) {}
     this.notify();
   }
 

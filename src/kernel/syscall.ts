@@ -2,6 +2,7 @@ import { SyscallNo, SyscallResult } from './types';
 import { globalIPCBus } from './ipcBus';
 import { globalKernelAgentManager } from './agentFramework';
 import './services/netd';
+import './services/waylandd';
 
 export interface SyscallTraceEntry {
   sysNo: SyscallNo;
@@ -170,6 +171,14 @@ export async function syscall(sysNo: SyscallNo, ...args: any[]): Promise<Syscall
         const res = await globalIPCBus.sendIPC(currentCallerPid, 'netd', 'SYS_NET_RESOLVE', { hostname });
         result = { code: 0, data: res };
         formattedRet = res.ip || '0';
+        break;
+      }
+
+      case SyscallNo.SYS_WAYLAND: {
+        const [action, payload] = args;
+        const res = await globalIPCBus.sendIPC(currentCallerPid, 'waylandd', action || 'SYS_WAYLAND_CREATE_SURFACE', payload || {});
+        result = { code: res.error ? -1 : 0, data: res };
+        formattedRet = res.error ? '-1' : '0';
         break;
       }
 
