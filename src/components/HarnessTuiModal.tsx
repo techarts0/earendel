@@ -41,10 +41,11 @@ export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
     };
 
     try {
-      const res = await globalHarnessEngine.executeSkill(content, ctx);
-      if (res.stdout) {
-        res.stdout.split('\n').forEach((line: string) => line.trim() && addLog(line));
-      }
+      const res = await globalHarnessEngine.executeSkill(content, ctx, (state, msg) => {
+        setCurrentState(state);
+        const cleanMsg = msg.replace(/\x1b\[[0-9;]*m/g, '').trim();
+        if (cleanMsg) addLog(`[${state}] ${cleanMsg}`);
+      });
       if (res.exitCode === 0) {
         setCurrentState(HarnessState.SUCCESS);
         addLog(`[Success] Skill execution finished successfully!`);

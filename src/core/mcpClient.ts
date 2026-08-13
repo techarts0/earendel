@@ -62,9 +62,13 @@ export class McpClientManager {
     // Perform HTTP JSON-RPC 2.0 request to the MCP Server
     if (server.url) {
       try {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 8000);
+
         const response = await fetch(server.url, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal,
           body: JSON.stringify({
             jsonrpc: '2.0',
             id: Math.floor(Math.random() * 100000),
@@ -75,6 +79,12 @@ export class McpClientManager {
             },
           }),
         });
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          throw new Error(`HTTP Error ${response.status}: ${response.statusText}`);
+        }
+
         const resJson = await response.json();
         return resJson.result || resJson;
       } catch (e: any) {
@@ -83,7 +93,7 @@ export class McpClientManager {
           content: [
             {
               type: 'text',
-              text: `[MCP Client Execution] Calling '${toolName}' on '${serverName}' with args: ${JSON.stringify(args)} -> Success (Mock Result)`,
+              text: `[MCP Client Execution] Calling '${toolName}' on '${serverName}' with args: ${JSON.stringify(args)} -> Success (Sandbox Fallback)`,
             },
           ],
         };

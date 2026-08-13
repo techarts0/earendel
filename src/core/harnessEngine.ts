@@ -20,6 +20,7 @@ interface FsmContext {
   stdoutAcc: string;
   originalSkillContent: string;
   lastErrorOutput: string;
+  onProgress?: (state: HarnessState, message: string) => void;
 }
 
 export class HarnessEngine {
@@ -34,10 +35,20 @@ export class HarnessEngine {
   }
 
   private appendLog(ctx: FsmContext, state: HarnessState, message: string, colorCode: string = '36') {
-    ctx.stdoutAcc += `\x1b[${colorCode}m[HarnessEngine: ${state}]\x1b[0m ${message}\n`;
+    const logText = `\x1b[${colorCode}m[HarnessEngine: ${state}]\x1b[0m ${message}\n`;
+    ctx.stdoutAcc += logText;
+    if (ctx.onProgress) {
+      try {
+        ctx.onProgress(state, message);
+      } catch (e) {}
+    }
   }
 
-  async executeSkill(content: string, execCtx: ExecutionContext): Promise<ExecutionResult> {
+  async executeSkill(
+    content: string,
+    execCtx: ExecutionContext,
+    onProgress?: (state: HarnessState, message: string) => void
+  ): Promise<ExecutionResult> {
     const ctx: FsmContext = {
       retries: 0,
       maxRetries: 3,
@@ -45,6 +56,7 @@ export class HarnessEngine {
       stdoutAcc: '',
       originalSkillContent: content,
       lastErrorOutput: '',
+      onProgress,
     };
 
     let currentState: HarnessState = HarnessState.PARSE;
