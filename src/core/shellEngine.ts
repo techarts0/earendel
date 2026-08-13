@@ -73,8 +73,11 @@ export class ShellEngine {
   }
 
   private expandVariables(text: string, scriptArgs: string[] = []): string {
-    return text.replace(/\$(\w+|\d+|\?)/g, (match, varName) => {
+    return text.replace(/\$(?:\{([^}]+)\}|(\w+|\d+|\?|#|@|\*))/g, (match, p1, p2) => {
+      const varName = p1 || p2;
       if (varName === '?') return this.env['?'] || '0';
+      if (varName === '#') return scriptArgs.length > 0 ? (scriptArgs.length - 1).toString() : '0';
+      if (varName === '@' || varName === '*') return scriptArgs.length > 1 ? scriptArgs.slice(1).join(' ') : '';
       if (/^\d+$/.test(varName)) {
         const index = parseInt(varName, 10);
         return scriptArgs[index] || '';
@@ -116,7 +119,9 @@ export class ShellEngine {
     }
 
     const aliased = this.expandAlias(trimmed);
-    this.history.push(aliased);
+    if (scriptArgs.length === 0 && !this.isShellControlFlow(trimmed)) {
+      this.history.push(aliased);
+    }
     const substituted = await this.expandCommandSubstitutions(aliased, scriptArgs);
     const expanded = this.expandVariables(substituted, scriptArgs);
 
@@ -254,6 +259,11 @@ export class ShellEngine {
     while (i < lines.length) {
       const line = lines[i];
 
+      if (!line || line.startsWith('#')) {
+        i++;
+        continue;
+      }
+
       if (line.startsWith('for ')) {
         const match = line.match(/^for\s+(\w+)\s+in\s+(.+)$/);
         if (match) {
@@ -263,7 +273,7 @@ export class ShellEngine {
           const bodyLines: string[] = [];
           i++;
           while (i < lines.length && lines[i] !== 'done') {
-            if (lines[i] !== 'do') {
+            if (lines[i] !== 'do' && !lines[i].startsWith('#')) {
               bodyLines.push(lines[i]);
             }
             i++;
@@ -276,6 +286,27 @@ export class ShellEngine {
               stdoutAcc += res.stdout;
               if (res.stderr) stderrAcc += res.stderr;
             }
+          }
+        }
+      } else if (line.startsWith('while ')) {
+        const condition = line.replace('while ', '').replace('; do', '').trim();
+
+        const bodyLines: string[] = [];
+        i++;
+        while (i < lines.length && lines[i] !== 'done') {
+          if (lines[i] !== 'do' && !lines[i].startsWith('#')) {
+            bodyLines.push(lines[i]);
+          }
+          i++;
+        }
+
+        let safetyCounter = 0;
+        while (this.evaluateCondition(condition) && safetyCounter < 1000) {
+          safetyCounter++;
+          for (const bodyCmd of bodyLines) {
+            const res = await this.execute(bodyCmd, scriptArgs);
+            stdoutAcc += res.stdout;
+            if (res.stderr) stderrAcc += res.stderr;
           }
         }
       } else if (line.startsWith('if ')) {
@@ -297,10 +328,12 @@ export class ShellEngine {
             i++;
             continue;
           }
-          if (inElse) {
-            elseLines.push(lines[i]);
-          } else {
-            thenLines.push(lines[i]);
+          if (!lines[i].startsWith('#')) {
+            if (inElse) {
+              elseLines.push(lines[i]);
+            } else {
+              thenLines.push(lines[i]);
+            }
           }
           i++;
         }
@@ -312,7 +345,7 @@ export class ShellEngine {
           if (res.stderr) stderrAcc += res.stderr;
         }
       } else {
-        const res = await this.executeSingleCommand(line, '');
+        const res = await this.execute(line, scriptArgs);
         stdoutAcc += res.stdout;
         if (res.stderr) stderrAcc += res.stderr;
       }
@@ -326,23 +359,57 @@ export class ShellEngine {
     const clean = condition.replace(/^\[\s*/, '').replace(/\s*\]$/, '').trim();
     if (!clean) return false;
 
+    if (clean.startsWith('-z ')) {
+      const val = clean.replace('-z ', '').trim().replace(/^["']|["']$/g, '');
+      return val === '';
+    }
+    if (clean.startsWith('-n ')) {
+      const val = clean.replace('-n ', '').trim().replace(/^["']|["']$/g, '');
+      return val !== '';
+    }
+
     if (clean.startsWith('-f ')) {
-      const file = clean.replace('-f ', '').trim();
+      const file = clean.replace('-f ', '').trim().replace(/^["']|["']$/g, '');
       const node = globalVFS.getNodeByPath(file);
       return node !== null && node.type === 'file';
     }
     if (clean.startsWith('-d ')) {
-      const dir = clean.replace('-d ', '').trim();
+      const dir = clean.replace('-d ', '').trim().replace(/^["']|["']$/g, '');
       const node = globalVFS.getNodeByPath(dir);
       return node !== null && node.type === 'directory';
     }
 
-    if (clean.includes('=')) {
-      const parts = clean.split('=').map((s) => s.trim().replace(/^["']|["']$/g, ''));
-      return parts[0] === parts[1];
+    const match = clean.match(/^(.*?)\s+(==|=|!=|-eq|-ne|-lt|-gt|-le|-ge)\s+(.*)$/);
+    if (match) {
+      const left = match[1].trim().replace(/^["']|["']$/g, '');
+      const op = match[2];
+      const right = match[3].trim().replace(/^["']|["']$/g, '');
+
+      const nLeft = parseFloat(left);
+      const nRight = parseFloat(right);
+
+      switch (op) {
+        case '=':
+        case '==':
+          return left === right;
+        case '!=':
+          return left !== right;
+        case '-eq':
+          return nLeft === nRight;
+        case '-ne':
+          return nLeft !== nRight;
+        case '-lt':
+          return nLeft < nRight;
+        case '-gt':
+          return nLeft > nRight;
+        case '-le':
+          return nLeft <= nRight;
+        case '-ge':
+          return nLeft >= nRight;
+      }
     }
 
-    return true;
+    return Boolean(clean);
   }
 
   private async executeSingleCommand(cmdStr: string, pipeInput: string = ''): Promise<ExecutionResult> {
@@ -552,12 +619,51 @@ export class ShellEngine {
   }
 
   private parseArgs(cmdStr: string): string[] {
-    const regex = /"([^"\\]*(?:\\.[^"\\]*)*)"|'([^'\\]*(?:\\.[^'\\]*)*)'|([^\s"']+)/g;
     const args: string[] = [];
-    let match;
-    while ((match = regex.exec(cmdStr)) !== null) {
-      args.push(match[1] || match[2] || match[3]);
+    let currentArg = '';
+    let inDoubleQuotes = false;
+    let inSingleQuotes = false;
+    let escaped = false;
+
+    for (let i = 0; i < cmdStr.length; i++) {
+      const char = cmdStr[i];
+
+      if (escaped) {
+        currentArg += char;
+        escaped = false;
+        continue;
+      }
+
+      if (char === '\\' && !inSingleQuotes) {
+        escaped = true;
+        continue;
+      }
+
+      if (char === '"' && !inSingleQuotes) {
+        inDoubleQuotes = !inDoubleQuotes;
+        continue;
+      }
+
+      if (char === "'" && !inDoubleQuotes) {
+        inSingleQuotes = !inSingleQuotes;
+        continue;
+      }
+
+      if (/\s/.test(char) && !inDoubleQuotes && !inSingleQuotes) {
+        if (currentArg.length > 0) {
+          args.push(currentArg);
+          currentArg = '';
+        }
+        continue;
+      }
+
+      currentArg += char;
     }
+
+    if (currentArg.length > 0) {
+      args.push(currentArg);
+    }
+
     return args;
   }
 }
