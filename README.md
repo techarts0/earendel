@@ -1,140 +1,176 @@
-# 🌌 Earendel - Pure TypeScript Microkernel WebOS
+<div align="center">
 
-> **A 100% browser-native, pure TypeScript POSIX-compliant microkernel operating system with zero backend dependencies, host disk mounting, and custom binary toolchain.**
+# Earendel 🌟
+
+**A Runtime-Native Microkernel Operating System on V8**
+
+Real syscalls. Real IPC. Real daemons.  
+Not a simulator — an OS whose hardware layer *is* the browser.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![TypeScript](https://img.shields.io/badge/TypeScript-5.0+-blue?logo=typescript)](https://www.typescriptlang.org/)
 [![Zero Dependencies](https://img.shields.io/badge/Dependencies-Zero%20(except%20xterm.js)-brightgreen)](#-architecture-highlights)
 [![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/techarts0/earendel/pulls)
 
-**Earendel** is an ultra-lightweight, high-performance Web Operating System written in pure TypeScript. Moving away from heavy WebAssembly-based x86 emulators and superficial "UI-only" desktop shells, Earendel implements a clean, POSIX-compliant microkernel architecture with Web Worker thread isolation, structured VFS, host disk mounting, and its own `ecc` compiler toolchain directly inside the browser.
 
-👉 **Live Demo**: [https://earendel.techarts.cn](https://earendel.techarts.cn)  
-*(Alternative Domain: [https://linux.techarts.cn](https://linux.techarts.cn) | Default Credentials: Username `hello` | Password `123456`)*  
+[Live Demo](https://earendel.techarts.cn) · [Documentation](#architecture) · [License](#license)
+
+</div>
 
 ---
 
-## 🏛️ Architecture Highlights
+## What is this?
 
-```text
-+-----------------------------------------------------------------------+
-|                         Userland (Main Thread)                        |
-|   xterm.js Terminal UI  |  GPU Canvas  |  DOM / Keyboard Listener    |
-+-----------------------------------------------------------------------+
-                                   |  (Zero-Copy / PostMessage IPC)
-+-----------------------------------------------------------------------+
-|                      Kernel Space (Web Worker)                        |
-|  +---------------------+  +--------------------+  +----------------+  |
-|  | Process Scheduler   |  |   VFS Block Engine |  |  Syscall API   |  |
-|  | (PCB / Shared Memory)|  | (IndexedDB/Host)   |  | (`sys` / libc) |  |
-|  +---------------------+  +--------------------+  +----------------+  |
-+-----------------------------------------------------------------------+
-                                   |
-+-----------------------------------------------------------------------+
-|                    Hardware Simulation & Storage                      |
-|  IndexedDB Block Device  |  FileSystem Access API  |  Cloud VFS Sync  |
-+-----------------------------------------------------------------------+
+Earendel is a POSIX-compliant microkernel OS that runs natively on the V8 JavaScript engine. It does **not** emulate x86 instructions (like v86/JSLinux) or simulate shell output (like web terminal toys). Instead, it treats the browser runtime as its hardware layer and builds real OS abstractions on top:
+
+```
+  User command: cat /etc/passwd
+       ↓
+  Shell → syscall(SYS_OPEN) → IPCBus → vfsd daemon → VFS tree lookup
+       → syscall(SYS_READ) → IPCBus → vfsd → fd offset advance → return content
+       → syscall(SYS_CLOSE) → IPCBus → vfsd → release fd
 ```
 
-- **100% Pure TypeScript & Zero External Dependencies**: Built strictly with native Web APIs and TypeScript. Zero heavy NPM bloat (only uses xterm.js for TTY terminal rendering).
-- **True Microkernel & Thread Isolation**: Kernel execution, process scheduling, and file I/O run on dedicated Web Worker threads, keeping the Main UI Thread running at a silky-smooth 60 FPS.
-- **POSIX System Call API**: JavaScript acts as the system's "C Language". Userland apps invoke kernel operations via a structured sys module Promise API (`sys.open`, `sys.read`, `sys.write`, `sys.fork`, `sys.execve`).
-- **Host Disk Mounting (`mount -t host`)**: Leverages Chrome's Native FileSystem Access API (`window.showDirectoryPicker`) to mount actual host machine directories directly into the virtual `/mnt` file tree.
-- **Multi-Layer VFS Engine**: Seamlessly unifies IndexedDB block device persistence, Host Local Disk directories, and Cloud VFS remote sync.
-- **Self-Contained Compiler & Binary Format**: Includes `ecc` (Earendel C/JS Compiler), compiling code into native Earendel Executable Format (`.eaf`) parsed and dispatched by the kernel.
-- **apt Package Manager Support**: Designed with a built-in package manager to pull, install, and run userland binaries dynamically from remote repos.
+Every operation flows through syscall dispatch, IPC message routing, and user-space daemon processing — exactly like a real microkernel.
 
-💡 Why Earendel?
+## Features
 
-| Traditional VM / Wasm Emulator | Pure Front-End UI Shells | The Earendel Microkernel |
-| :--- | :--- | :--- |
-| ❌ Heavy & Slow: Takes seconds/minutes to download 100MB+ OS images | ❌ Fake OS: Just CSS/DOM dragging without actual process isolation | ⚡ Instant Boot: 0.1s startup time, ~30MB memory footprint |
-| ❌ Black Box: Hard to inspect x86 assembly & Wasm bytecode | ❌ UI Blocking: Long-running loops freeze the browser main thread | 🛡️ Thread Isolated: Web Worker kernel guarantees 60 FPS Terminal UI |
-| ❌ Isolated Sandboxes: Cannot directly read/write local host files | ❌ No Syscall Model: Lacks structured kernel system calls | 📂 Native Disk Access: Direct `mount -t host` Host FS integration |
-| ❌ High Hosting Cost: Requires expensive backend VM orchestration | ❌ Superficial: Limited to basic string parser logic | 🎓 White-Box CS Learning: Inspect every Syscall in real-time (`strace`) |
+### 🔧 Microkernel & Syscalls
 
----
+- Microkernel core: IPCBus, TaskScheduler, VMPageTable
+- User-space daemons: `vfsd` (filesystem), `pmd` (process manager), `driverd` (devices), `capAgentd` (security)
+- POSIX syscalls: `SYS_FORK`, `SYS_EXECVE`, `SYS_WAITPID`, `SYS_READ/WRITE/OPEN/CLOSE`, `SYS_KILL`, `SYS_FETCH`, `SYS_INFER`, and more
+- Per-process PCB with file descriptor tables, signal queues, and capability tokens
+- 100+ real Linux commands with pipes, redirects, `&&`/`||`, `for`/`if` control flow
 
-## 🌟 Key Features
+### 📁 Virtual File System
 
-### 1. Real Hardware & Local Storage Integration
-- **Host FS Mounting**: Run `mount -t host` under HTTPS to select and bridge a real folder on your Mac/PC directly into `/mnt/host`.
-- **Hybrid VFS**: Filesystem Hierarchy Standard (FHS) featuring `/bin`, `/boot`, `/dev`, `/etc`, `/home`, `/lib`, `/mnt`, `/opt`, `/usr`, `/var`.
-- **Time-Machine Snapshots**: Save (`snapshot save init`) and restore state in milliseconds with zero server delay.
+Multiple persistence backends behind a unified VFS interface:
 
-### 2. Multi-Language Execution & Native Toolchains
-- **Shell, Python 3, & JS Interpreters**: Run Python scripts, Shell pipelines, or native JS binaries.
-- **ecc Compiler & .eaf Executables**: Compile userland code to Earendel Native Executable files and execute them seamlessly.
-- **Syscall SDK (`earendel/sys`)**: Program custom userland applications targeting POSIX-like kernel APIs.
+| Backend | Mount Point | Persistence |
+|---------|-------------|-------------|
+| IndexedDB | `/` | ✅ Persistent |
+| Local Disk Image | configurable | ✅ Persistent |
+| Cloud Image | configurable | ✅ Persistent |
+| RAMVFS | `/tmp` | ❌ Volatile |
 
-### 3. Full CLI & Real-Time System Tools
-- **Subsystem Emulation**: Emulates Docker CLI (`docker ps`, `docker run`), Netfilter Firewall (`ufw`, `iptables`), and Process Utilities (`ps`, `top`, `htop`, `kill`).
-- **tmux Terminal Multiplexer**: Split terminal views vertically (`tmux split`) or horizontally (`tmux split-h`) into active concurrent sessions.
-- **Geek Culture**: Easter eggs including ASCII fireworks (`tell`), train animations (`sl`), 3D ASCII banners (`figlet`), and nuclear failsafes (`rm -rf /`).
+Full FHS directory structure, symlinks, permissions (DAC), and `mount`/`umount` support.
 
----
+### 🤖 AI-Native OS
 
-## 🚀 Quick Start
+AI is not bolted on — it's a first-class OS citizen:
 
-### Local Development Setup
+- **`SYS_INFER` syscall** — invoke LLM inference at the kernel level
+- **`/dev/ai` character device** — `echo "prompt" > /dev/ai && cat /dev/ai`
+- **`/etc/llm.conf`** — configure model, endpoint, API key, and parameters
+- Any process can call AI through standard file I/O — no SDK required
+
+### 🕹️ OS-Native Agent Framework
+
+Built-in harness-skill agent architecture:
+
+- **`skill` command** — execute `.md` skill files as agent workflows
+- **`/dev/skill` character device** — programmatic agent invocation
+- Agents run as first-class OS processes with full syscall access
+- Skill files are plain Markdown — human-readable, version-controllable
+
+### 🛠️ Toolchain
+
+- **ECC Compiler** — compile JavaScript and WASM into single-file executable packages
+- **JavaScript** as the native programming language (runs on the host V8)
+- **Multi-runtime scripting**: Bash (full), JavaScript (native), Python (subset)
+- **APT package manager** — `apt install/remove/update` with growing ecosystem *(WIP)*
+
+### 🌐 Networking
+
+- **`SYS_FETCH` syscall** — HTTP/1.1, HTTP/2, HTTP/3 compatible
+- **WebSocket** support for persistent connections
+- **WebRTC** for peer-to-peer communication
+- Virtual firewall engine (`iptables`/`ufw` semantics)
+
+### 🖥️ Hardware Abstraction Layer
+
+The browser *is* the hardware. HAL maps Web APIs to POSIX device files:
+
+| Web API | Device | Purpose |
+|---------|--------|---------|
+| WebGPU | `/dev/gpu0` | GPU compute & rendering |
+| WebUSB | `/dev/usb0` | USB device access |
+| WebAudio | `/dev/audio` | Sound I/O |
+| Canvas/Framebuffer | `/dev/fb0` | Display output |
+| Gamepad | `/dev/input/js0` | Game controller |
+| Camera | `/dev/video0` | Video capture |
+
+### 🪟 GUI
+
+- Wayland-based compositor protocol
+- Window management for graphical applications
+- Terminal + GUI coexistence
+
+### 🔍 Observability & Security
+
+- **`strace`** — trace syscalls for any command in real-time
+- **`ipc-trace`** — visualize IPC message flow between daemons
+- **`capAgentd`** — capability-based security daemon with live guardrails  
+  (e.g., intercepts `rm -rf /` before execution)
+
+## Quick Start
+
+Visit **[earendel.techarts.cn](https://earendel.techarts.cn)** — no install, no server, no signup.
+
+Or run locally:
 
 ```bash
-# Clone the repository
-git clone https://github.com/techarts0/earendel.git
-
-# Navigate to project directory
+git clone https://github.com/nickshen/earendel.git
 cd earendel
-
-# Install dependencies (Minimal setup)
 npm install
-
-# Launch Vite dev server
 npm run dev
 ```
 
-Open your browser and visit `https://localhost:3000` or `http://localhost:3000`. Log in with username `hello` and password `123456`.
+## Architecture
 
-### Embedding in Web Apps / LMS
-
-Earendel requires zero backend servers and can be embedded as a 100% client-side interactive lab iframe:
-
-```html
-<iframe 
-  src="https://earendel.techarts.cn" 
-  width="100%" 
-  height="600px" 
-  frameborder="0" 
-  allow="clipboard-read; clipboard-write">
-</iframe>
+```
+┌────────────────────────────────────────────────────┐
+│                   User Space                       │
+│  Shell ─→ Commands ─→ Scripts ─→ Agents            │
+│      ↕ syscall()                                   │
+├────────────────────────────────────────────────────┤
+│  ┌──────┐ ┌─────┐ ┌───────┐ ┌─────────┐          │
+│  │ vfsd │ │ pmd │ │driverd│ │capAgentd│  Daemons  │
+│  └──┬───┘ └──┬──┘ └───┬───┘ └────┬────┘          │
+│     └────────┴────────┴──────────┘                 │
+│              IPCBus (message routing)              │
+│              TaskScheduler (PCB + scheduling)      │
+│              VMPageTable (page alloc + fault)       │
+│                  Microkernel                        │
+├────────────────────────────────────────────────────┤
+│  V8 Engine · IndexedDB · Web APIs · WebWorkers     │
+│              Hardware Layer (Browser Runtime)       │
+└────────────────────────────────────────────────────┘
 ```
 
----
+## Why not v86 / JSLinux / WebVM?
 
-## 💻 Supported Commands Matrix
+| | v86 / JSLinux | Earendel |
+|---|---|---|
+| Approach | Emulate x86 CPU instructions | Build OS abstractions on V8 |
+| Kernel | Real Linux kernel on virtual hardware | Native microkernel on browser runtime |
+| Binary compat | ✅ Runs x86 ELF binaries | ❌ Runs JS/WASM executables |
+| Boot time | 3-10 seconds | Instant |
+| Bundle size | ~30MB disk image | < 3MB |
+| AI integration | ❌ | ✅ First-class (`SYS_INFER`) |
+| Observability | Black box | Full transparency (`strace`, `ipc-trace`) |
 
-| Category | Commands |
-| :--- | :--- |
-| **File Management** | `ls`, `pwd`, `cd`, `cat`, `touch`, `mkdir`, `rm`, `cp`, `mv`, `head`, `tail`, `wc`, `find`, `which`, `whereis`, `mount`, `umount`, `xclip` |
-| **Permissions & Users** | `chmod`, `chown`, `whoami`, `who`, `id`, `useradd`, `userdel`, `su`, `sudo`, `login`, `umask` |
-| **Interpreters & Compiler** | `python3` (or `python`), `node` (or `js`), `ecc` (EAF Binary Compiler), `apt` (Package Manager) |
-| **Text Editors** | `vi` (or `vim`), `nano` |
-| **Networking & Security** | `ping`, `curl`, `ufw`, `iptables`, `tcpdump`, `traceroute` |
-| **Process & Kernel** | `ps`, `top`, `htop`, `worker`, `kill`, `systemctl`, `df`, `free`, `uptime`, `time`, `crontab`, `dmesg`, `lsmod`, `modprobe`, `vmap`, `ipcs` |
-| **Containers & Multiplexer** | `docker`, `tmux`, `snapshot` (backup, restore), `display`, `fbset`, `fbclear` |
-| **Geek & Customization** | `theme`, `sound`, `man`, `alias`, `unalias`, `cheat`, `tell`, `sl`, `figlet` |
+Earendel is not trying to be a virtual machine. It is an **operating system whose hardware happens to be a JavaScript runtime**.
 
----
+## License
 
-## 🎓 CS Education & Commercial Integration
-
-Earendel is built to serve as an ideal environment for:
-
-- **Operating System (OS) Courses**: Demonstrating processes, scheduling, virtual filesystems, and Syscall mechanisms without setting up complex C/GCC cross-compilers or heavy VMs.
-- **Interactive EdTech Labs**: Embedding instant, zero-cost, crash-proof Linux lab terminals into online tutorials, coding bootcamps, or LMS platforms.
-- **Browser-Native Utilities**: Building local-first Web IDEs, log inspectors, or terminal-based developer tools.
+[MIT](LICENSE)
 
 ---
 
-## 📜 License
+<div align="center">
 
-Distributed under the MIT License. Free for personal, educational, and commercial use.
+*The name "Earendel" comes from the oldest known English word for "morning star" — a light before dawn.*
+
+</div>
