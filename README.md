@@ -2,7 +2,7 @@
 
 # Earendel 🌟
 
-**A Runtime-Native Microkernel Operating System on V8**
+**An Agent-Native Microkernel Operating System on V8**
 
 Real syscalls. Real IPC. Real daemons.  
 Not a simulator — an OS whose hardware layer *is* the browser.
