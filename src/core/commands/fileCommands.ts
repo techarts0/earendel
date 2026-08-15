@@ -74,9 +74,15 @@ export const fileCommands: Command[] = [
     description: 'Change the shell working directory',
     category: 'file',
     execute: (ctx) => {
-      const targetPath = ctx.args[0] || '~';
       const user = ctx.env['USER'] || 'hello';
-      const targetNode = ctx.vfs.getNodeByPath(targetPath);
+      const homeDir = ctx.env['HOME'] || (user === 'root' ? '/root' : `/home/${user}`);
+      let targetPath = ctx.args[0] || homeDir;
+      if (targetPath === '~') {
+        targetPath = homeDir;
+      } else if (targetPath.startsWith('~/')) {
+        targetPath = homeDir + targetPath.slice(1);
+      }
+      const targetNode = ctx.vfs.getNodeByPath(targetPath, user);
       if (targetNode && !ctx.vfs.checkPermission(targetNode, 'x', user)) {
         return { stdout: '', stderr: `bash: cd: ${targetPath}: Permission denied\n`, exitCode: 1 };
       }
@@ -84,6 +90,7 @@ export const fileCommands: Command[] = [
       if (!ok) {
         return { stdout: '', stderr: `bash: cd: ${targetPath}: No such file or directory\n`, exitCode: 1 };
       }
+      ctx.env['PWD'] = ctx.vfs.getPwd();
       return { stdout: '', stderr: '', exitCode: 0 };
     },
   },

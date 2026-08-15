@@ -669,3 +669,6 @@ export class ShellEngine {
 }
 
 export const globalShellEngine = new ShellEngine();
+if (typeof window !== 'undefined') {
+  (window as any).globalShellEngine = globalShellEngine;
+}

@@ -446,9 +446,31 @@ constraints:
     return '/' + pathParts.join('/');
   }
 
-  resolvePath(pathStr: string, customHome?: string): string {
+  getHomeDir(userOrHome?: string): string {
+    if (!userOrHome || userOrHome === 'hello') return '/home/hello';
+    if (userOrHome === 'root') return '/root';
+    if (userOrHome.startsWith('/')) return userOrHome;
+    const passwd = this.readFile('/etc/passwd') || '';
+    for (const line of passwd.split('\n')) {
+      const parts = line.split(':');
+      if (parts[0] === userOrHome && parts[5]) {
+        return parts[5];
+      }
+    }
+    return `/home/${userOrHome}`;
+  }
+
+  resolvePath(pathStr: string, customHomeOrUser?: string): string {
     if (!pathStr || pathStr === '.') return this.getPwd();
-    const homeDir = customHome || (typeof window !== 'undefined' && (window as any).globalShellEngine?.getEnv('HOME')) || '/home/hello';
+    
+    let homeDir = '/home/hello';
+    if (customHomeOrUser) {
+      homeDir = this.getHomeDir(customHomeOrUser);
+    } else if (typeof window !== 'undefined' && (window as any).globalShellEngine) {
+      const shellEnv = (window as any).globalShellEngine;
+      homeDir = shellEnv.getEnv('HOME') || this.getHomeDir(shellEnv.getEnv('USER') || 'hello');
+    }
+
     if (pathStr === '~') return homeDir;
     if (pathStr.startsWith('~/')) return homeDir + pathStr.slice(1);
 
@@ -471,8 +493,8 @@ constraints:
     return '/' + resolvedParts.join('/');
   }
 
-  getNodeByPath(pathStr: string): VFSNode | null {
-    const absPath = this.resolvePath(pathStr);
+  getNodeByPath(pathStr: string, customHomeOrUser?: string): VFSNode | null {
+    const absPath = this.resolvePath(pathStr, customHomeOrUser);
     if (absPath.startsWith('/proc') || absPath === '/proc') {
       const procNode = this.generateProcNode(absPath);
       if (procNode) return procNode;
@@ -756,8 +778,8 @@ constraints:
   }
 
   changeDirectory(pathStr: string, currentUser = 'hello'): boolean {
-    const absPath = this.resolvePath(pathStr);
-    const target = this.getNodeByPath(absPath);
+    const absPath = this.resolvePath(pathStr, currentUser);
+    const target = this.getNodeByPath(absPath, currentUser);
 
     if (target) {
       const match = globalHostMountEngine.getMatchingMount(absPath);
@@ -1343,3 +1365,6 @@ constraints:
 }
 
 export const globalVFS = new VirtualFileSystem();
+if (typeof window !== 'undefined') {
+  (window as any).globalVFS = globalVFS;
+}

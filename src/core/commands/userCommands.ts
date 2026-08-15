@@ -90,6 +90,7 @@ export const userCommands: Command[] = [
       ctx.env['USER'] = username;
       ctx.env['HOME'] = username === 'root' ? '/root' : `/home/${username}`;
       ctx.vfs.changeDirectory(ctx.env['HOME'], username);
+      ctx.env['PWD'] = ctx.vfs.getPwd();
 
       return { stdout: `Switched to user ${username}.\n`, stderr: '', exitCode: 0 };
     },
