@@ -32,6 +32,8 @@ interface StoredNode {
   symlinkTarget?: string;
 }
 
+export type VFS = VirtualFileSystem;
+
 export class VirtualFileSystem {
   root: VFSNode;
   currentDirectory: VFSNode;
@@ -178,6 +180,127 @@ export class VirtualFileSystem {
     this.writeFile('/lib/x86_64-linux-gnu/libc.so.6', '#!ELF C Standard Library (GNU libc)\n');
     this.writeFile('/lib/x86_64-linux-gnu/libm.so.6', '#!ELF Math Shared Library\n');
     this.writeFile('/lib64/ld-linux-x86-64.so.2', '#!ELF Dynamic Linker/Loader\n');
+
+    // Standard Agentic Skills Catalog (/skills)
+    this.mkdir('/skills/git-commit-helper', true);
+    this.writeFile(
+      '/skills/git-commit-helper/skill.md',
+      `---
+name: git-commit-helper
+version: 1.0.0
+description: 自动分析工作区 diff 并遵循 Conventional Commits 规范生成提交信息并执行提交
+author: Earendel Core Team
+inputs:
+  scope:
+    type: string
+    description: 提交的作用域范围 (例如 core, vfs, kernel)
+    required: false
+    default: ""
+  dry_run:
+    type: boolean
+    description: 是否仅生成提交信息而不实际执行 git commit
+    required: false
+    default: false
+tools:
+  system: ["git", "echo", "cat"]
+timeout: 60s
+max_turns: 4
+constraints:
+  - "禁止执行 git push"
+  - "禁止在提交信息中包含机密或敏感 token"
+---
+
+## Goal
+检查当前 git 仓库的修改状态，生成符合 Conventional Commits 规范的简明提交信息，并在非 dry_run 模式下完成 commit。
+
+## Steps
+1. 运行 \`git status\` 检查当前是否有暂存区或工作区修改。
+2. 运行 \`git diff --cached\` (或 \`git diff\`) 提取具体的代码变更。
+3. 根据变更内容总结提交类型 (feat, fix, docs, refactor, style, test, chore)。
+4. 如果 inputs.dry_run 为 false，执行 \`git commit -m "..."\`；否则仅输出建议的提交信息。
+`
+    );
+
+    this.mkdir('/skills/sys-doctor', true);
+    this.writeFile(
+      '/skills/sys-doctor/skill.md',
+      `---
+name: sys-doctor
+version: 1.0.0
+description: 系统健康检查与资源诊断智能体，快速排查系统负载、内存与关键守护进程状态
+author: Earendel Core Team
+inputs:
+  verbose:
+    type: boolean
+    description: 是否输出详细诊断指标
+    required: false
+    default: false
+tools:
+  system: ["ps", "uptime", "free", "df", "dmesg", "echo"]
+timeout: 45s
+max_turns: 3
+constraints:
+  - "禁止修改或删除任何系统关键文件"
+---
+
+## Goal
+全面巡检 Earendel OS 当前系统的运行健康状态，生成清晰的诊断报告。
+
+## Steps
+1. 运行 \`uptime\` 和 \`free\` 检查系统运行时长和内存占用。
+2. 运行 \`ps aux\` 检查系统内核守护进程 (systemd, driverd, kagentd 等) 是否处于在线状态。
+3. 检查是否有异常错误日志并输出系统体检评分与优化建议。
+`
+    );
+
+    // Agentic Context & Memory Infrastructure (L0, L2, L3)
+    this.mkdir('/tmp/agent', true);
+    this.mkdir('/var/log/harness', true);
+    this.mkdir('/var/lib/harness/memory', true);
+    this.mkdir('/etc/agent', true);
+
+    this.writeFile(
+      '/etc/agent/default_profile.json',
+      JSON.stringify(
+        {
+          language: 'zh-CN',
+          code_style: 'concise',
+          guidelines: [
+            '输出清晰的执行步骤与结果摘要',
+            '遇到异常优先使用 grep/cat 排查原因',
+          ],
+          custom_preferences: 'Earendel POSIX Standard Compliance',
+        },
+        null,
+        2
+      ) + '\n'
+    );
+
+    this.writeFile(
+      '/home/hello/.agent_profile',
+      JSON.stringify(
+        {
+          language: 'zh-CN',
+          code_style: 'standard-unix',
+          guidelines: [
+            '优先使用现代化 POSIX 命令',
+            '关键文件操作前先验证文件存在性',
+          ],
+          custom_preferences: 'Default shell: bash, workspace: /home/hello',
+        },
+        null,
+        2
+      ) + '\n'
+    );
+
+    this.writeFile(
+      '/var/lib/harness/memory/lessons.md',
+      `# Earendel Agentic OS Lessons Learned & Procedural Memory
+
+- **[System Baseline]**: When using VFS paths in scripts, ensure leading slash is present (e.g. \`/home/hello\`).
+- **[System Baseline]**: For heavy file searches, use \`find\` or \`grep\` with targeted directories instead of root.
+`
+    );
 
     // Sync physical binary symbols to /usr/bin/
     try {

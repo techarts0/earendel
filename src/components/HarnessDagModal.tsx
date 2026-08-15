@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Network, CheckCircle2, AlertCircle, RefreshCw, Cpu, X, Play, Code, ArrowRight } from 'lucide-react';
 import { globalHarnessEngine, HarnessState } from '../core/harnessEngine';
+import { resolveSkillTarget } from '../core/skillParser';
 
 interface HarnessDagModalProps {
   isOpen: boolean;
@@ -8,7 +9,7 @@ interface HarnessDagModalProps {
   skillFilePath?: string;
 }
 
-export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClose, skillFilePath = '/skills/demo.md' }) => {
+export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClose, skillFilePath = '/skills/git-commit-helper/skill.md' }) => {
   const [currentState, setCurrentState] = useState<HarnessState>(HarnessState.IDLE);
   const [logs, setLogs] = useState<string[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
@@ -27,7 +28,22 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
     setLogs([`[DAG Engine] Loading Target Skill File: ${skillFilePath}...`]);
 
     const vfs = (window as any).globalVFS;
-    const fileContent = vfs ? (vfs.readFile(skillFilePath, 'hello') ?? '') : '';
+    let fileContent = '';
+    try {
+      if (vfs) {
+        const resolved = resolveSkillTarget(vfs, skillFilePath, 'hello');
+        fileContent = resolved.content;
+      }
+    } catch (err: any) {
+      setCurrentState(HarnessState.ERROR);
+      setLogs((prev) => [
+        ...prev,
+        `[PARSE ERROR] ${skillFilePath}: ${err.message}`,
+      ]);
+      setIsExecuting(false);
+      return;
+    }
+
 
     if (!fileContent.trim()) {
       setCurrentState(HarnessState.ERROR);
