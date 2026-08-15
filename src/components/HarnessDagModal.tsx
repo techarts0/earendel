@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { Network, CheckCircle2, AlertCircle, RefreshCw, Cpu, X, Play, Code, ArrowRight } from 'lucide-react';
 import { globalHarnessEngine, HarnessState } from '../core/harnessEngine';
 import { resolveSkillTarget } from '../core/skillParser';
+import { globalVFS } from '../core/vfs';
+import { globalProcessManager } from '../core/processManager';
 
 interface HarnessDagModalProps {
   isOpen: boolean;
@@ -11,12 +13,14 @@ interface HarnessDagModalProps {
 
 export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClose, skillFilePath = '/skills/git-commit-helper/skill.md' }) => {
   const [currentState, setCurrentState] = useState<HarnessState>(HarnessState.IDLE);
+  const [lastActiveState, setLastActiveState] = useState<HarnessState>(HarnessState.PARSE);
   const [logs, setLogs] = useState<string[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
 
   useEffect(() => {
     if (isOpen) {
       setCurrentState(HarnessState.IDLE);
+      setLastActiveState(HarnessState.PARSE);
       setLogs([]);
     }
   }, [isOpen, skillFilePath]);
@@ -27,15 +31,14 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
     setIsExecuting(true);
     setLogs([`[DAG Engine] Loading Target Skill File: ${skillFilePath}...`]);
 
-    const vfs = (window as any).globalVFS;
+    const vfs = globalVFS;
     let fileContent = '';
     try {
-      if (vfs) {
-        const resolved = resolveSkillTarget(vfs, skillFilePath, 'hello');
-        fileContent = resolved.content;
-      }
+      const resolved = resolveSkillTarget(vfs, skillFilePath, 'hello');
+      fileContent = resolved.content;
     } catch (err: any) {
       setCurrentState(HarnessState.ERROR);
+      setLastActiveState(HarnessState.PARSE);
       setLogs((prev) => [
         ...prev,
         `[PARSE ERROR] ${skillFilePath}: ${err.message}`,
@@ -44,9 +47,9 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
       return;
     }
 
-
     if (!fileContent.trim()) {
       setCurrentState(HarnessState.ERROR);
+      setLastActiveState(HarnessState.PARSE);
       setLogs((prev) => [
         ...prev,
         `[PARSE ERROR] ${skillFilePath}: File is empty or does not exist. Execution aborted at PARSE step.`,
@@ -59,15 +62,18 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
       await globalHarnessEngine.executeSkill(
         fileContent,
         {
-          vfs: (window as any).globalVFS,
-          env: {},
+          vfs: globalVFS,
+          env: { USER: 'hello', HOME: '/home/hello', PWD: '/home/hello' },
           lang: 'zh',
           args: [],
           pipeInput: '',
-          processManager: (window as any).globalProcessManager,
+          processManager: globalProcessManager,
         },
         (state, log) => {
           setCurrentState(state);
+          if (state !== HarnessState.ERROR && state !== HarnessState.IDLE) {
+            setLastActiveState(state);
+          }
           if (log) setLogs((prev) => [...prev, `[FSM:${state}] ${log.replace(/\x1b\[[0-9;]*m/g, '')}`]);
         }
       );
@@ -80,15 +86,15 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
   };
 
   const dagNodes = [
-    { state: HarnessState.PARSE, title: '0-Token Shebang Parse', desc: 'Validates #!/dev/skill & parses YAML frontmatter' },
-    { state: HarnessState.INFER, title: 'AI Goal Inference', desc: 'Queries driverd (/dev/ai) to generate execution plan' },
-    { state: HarnessState.ACT, title: 'Sub-Shell Command Act', desc: 'Executes POSIX shell pipelines in sandboxed sub-shell' },
-    { state: HarnessState.REFLEXION, title: 'Reflexion Self-Correction', desc: 'Catches non-zero exit codes & retries with AI fix' },
-    { state: HarnessState.SUCCESS, title: 'Execution Complete', desc: 'Skill execution finished with status 0' },
+    { state: HarnessState.PARSE, title: '0-Token Manifest Parse', desc: 'Parses YAML frontmatter, validates inputs schema & builds tool permissions' },
+    { state: HarnessState.INFER, title: 'Agent Goal Reasoning', desc: 'JIT Context assembly & invokes driverd (/dev/ai) with token condensation' },
+    { state: HarnessState.ACT, title: 'Sandboxed Act & Scratchpad', desc: 'Executes commands with whitelist check & redirects large outputs to /tmp/agent/' },
+    { state: HarnessState.REFLEXION, title: 'Reflexion & Lessons Learned', desc: 'Analyzes errors, retries with fixed commands & records learned rules' },
+    { state: HarnessState.SUCCESS, title: 'Execution Complete & GC', desc: 'Appends L2 session audit, persists lessons and recycles L0 scratchpad' },
   ];
 
   const getStepStyle = (nodeState: HarnessState) => {
-    if (currentState === HarnessState.ERROR && nodeState === HarnessState.PARSE) {
+    if (currentState === HarnessState.ERROR && nodeState === lastActiveState) {
       return {
         border: '1px solid #ef4444',
         backgroundColor: 'rgba(127, 29, 29, 0.6)',
@@ -106,10 +112,7 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
       };
     }
 
-    if (
-      (currentState === HarnessState.SUCCESS && nodeState !== HarnessState.ERROR) ||
-      (currentState === HarnessState.ACT && nodeState === HarnessState.PARSE)
-    ) {
+    if (currentState === HarnessState.SUCCESS && nodeState !== HarnessState.ERROR) {
       return {
         border: '1px solid rgba(16, 185, 129, 0.6)',
         backgroundColor: 'rgba(6, 78, 59, 0.4)',
@@ -246,7 +249,7 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
                       Step 0{idx + 1}
                     </span>
                     {currentState === n.state && <RefreshCw style={{ width: '14px', height: '14px', color: '#22d3ee' }} />}
-                    {currentState === HarnessState.ERROR && n.state === HarnessState.PARSE && <AlertCircle style={{ width: '14px', height: '14px', color: '#f87171' }} />}
+                    {currentState === HarnessState.ERROR && n.state === lastActiveState && <AlertCircle style={{ width: '14px', height: '14px', color: '#f87171' }} />}
                     {currentState === HarnessState.SUCCESS && <CheckCircle2 style={{ width: '14px', height: '14px', color: '#34d399' }} />}
                   </div>
                   <h4 style={{ fontSize: '14px', fontWeight: 600, color: '#f3f4f6', margin: '0 0 4px 0' }}>{n.title}</h4>
@@ -285,8 +288,8 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
                 key={i}
                 style={{
                   lineHeight: 1.5,
-                  color: l.includes('ERROR') || l.includes('Missing Shebang') ? '#fca5a5' : '#e9d5ff',
-                  borderLeft: `2px solid ${l.includes('ERROR') ? '#ef4444' : 'rgba(168, 85, 247, 0.4)'}`,
+                  color: l.includes('ERROR') || l.includes('Failure') || l.includes('Interception') ? '#fca5a5' : '#e9d5ff',
+                  borderLeft: `2px solid ${l.includes('ERROR') || l.includes('Failure') || l.includes('Interception') ? '#ef4444' : 'rgba(168, 85, 247, 0.4)'}`,
                   paddingLeft: '8px',
                 }}
               >

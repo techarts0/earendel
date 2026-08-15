@@ -16,6 +16,7 @@ export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
 }) => {
   const [content] = useState(initialContent);
   const [currentState, setCurrentState] = useState<HarnessState>(HarnessState.PARSE);
+  const [lastActiveState, setLastActiveState] = useState<HarnessState>(HarnessState.PARSE);
   const [logs, setLogs] = useState<string[]>([
     `[HarnessTuiModal] Opened Cockpit Window for ${filePath}`,
   ]);
@@ -30,6 +31,8 @@ export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
     if (isRunning) return;
     setIsRunning(true);
     setCurrentState(HarnessState.PARSE);
+    setLastActiveState(HarnessState.PARSE);
+    setRetryCount(0);
     addLog(`[Action] Starting Auto Execution...`);
 
     const ctx = {
@@ -43,6 +46,12 @@ export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
     try {
       const res = await globalHarnessEngine.executeSkill(content, ctx, (state, msg) => {
         setCurrentState(state);
+        if (state !== HarnessState.ERROR && state !== HarnessState.IDLE) {
+          setLastActiveState(state);
+        }
+        if (state === HarnessState.REFLEXION) {
+          setRetryCount((prev) => prev + 1);
+        }
         const cleanMsg = msg.replace(/\x1b\[[0-9;]*m/g, '').trim();
         if (cleanMsg) addLog(`[${state}] ${cleanMsg}`);
       });
@@ -155,7 +164,7 @@ export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
         >
           {states.map((st, idx) => {
             const isActive = currentState === st;
-            const isError = currentState === HarnessState.ERROR && st === HarnessState.REFLEXION;
+            const isError = currentState === HarnessState.ERROR && st === lastActiveState;
             return (
               <React.Fragment key={st}>
                 <div

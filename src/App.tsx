@@ -81,7 +81,7 @@ export function App() {
       {/* Harness Skill Visual DAG Flow Canvas Modal */}
       <HarnessDagModal
         isOpen={showDagModal}
-        skillFilePath={dagModalData?.path || '/skills/demo.md'}
+        skillFilePath={dagModalData?.path || '/skills/sys-doctor/skill.md'}
         onClose={() => setShowDagModal(false)}
       />
 
