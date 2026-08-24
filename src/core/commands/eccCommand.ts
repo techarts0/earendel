@@ -127,7 +127,7 @@ export const eccCommand: Command = {
   name: 'ecc',
   description: 'ECMA Compiler Collection toolchain with Tree-Shaking, -O2 Minification, --embed Assets, and Symbol Stripping',
   category: 'sys',
-  execute: (ctx) => {
+  execute: async (ctx) => {
     let outputFile = 'a.out.eaf';
     let inputFile = '';
     const embedsMap: Record<string, string> = {};
@@ -136,6 +136,69 @@ export const eccCommand: Command = {
     const isO2 = ctx.args.includes('-O2') || ctx.args.includes('-O');
     const isStrip = ctx.args.includes('-s') || ctx.args.includes('--strip');
     const isWasm = ctx.args.includes('--target=wasm');
+
+    const args = ctx.args;
+    const subCmd = args[0]?.toLowerCase();
+
+    // 1. ecc test: Native Test Suite Subcommand
+    if (subCmd === 'test') {
+      const { EccTestEngine } = await import('../eccTestEngine');
+      let targetFile = args[1];
+      const curDirName = ctx.vfs.currentDirectory?.name || '/home/hello';
+      if (!targetFile) {
+        // 自动探测当前目录下的 test.js
+        if (ctx.vfs.getNodeByPath('test.js')) {
+          targetFile = 'test.js';
+        }
+      }
+
+      if (!targetFile) {
+        return {
+          stdout: '',
+          stderr: 'ecc: error: no test file specified. Usage: ecc test <test_file.js>\n',
+          exitCode: 1,
+        };
+      }
+
+      const absPath = targetFile.startsWith('/') ? targetFile : `${curDirName}/${targetFile}`.replace(/\/+/g, '/');
+      const node = ctx.vfs.getNodeByPath(absPath);
+      if (!node || node.type !== 'file') {
+        return {
+          stdout: '',
+          stderr: `ecc: error: test file '${targetFile}' not found in VFS.\n`,
+          exitCode: 1,
+        };
+      }
+
+      const cwd = absPath.substring(0, absPath.lastIndexOf('/')) || '/home/hello';
+      const outcome = await EccTestEngine.runTestCode(node.content || '', ctx, { cwd });
+      return {
+        stdout: outcome.logs + '\n',
+        stderr: '',
+        exitCode: outcome.exitCode,
+      };
+    }
+
+    if (args.length === 0 || args.includes('-h') || args.includes('--help')) {
+      return {
+        stdout: [
+          `\x1b[1;36m[ecc] ECMA Compiler Collection Toolchain v1.0.0\x1b[0m`,
+          `Usage:`,
+          `  ecc <input.js> -o <output.eaf> [options]   (Compile & Link into EAF executable)`,
+          `  ecc test <test.js>                         (Run native ECMA test suite)`,
+          ``,
+          `Compiler Options:`,
+          `  -o <output>        Specify output executable name`,
+          `  -O2                Enable dead code elimination & minification pass`,
+          `  -s, --strip        Strip symbol table (.symtab) from binary`,
+          `  --embed <dir>      Inline static directory resources into .data section`,
+          `  --target=wasm      Cross-compile into WebAssembly runtime container`,
+          `  -v, --version      Display toolchain version and architecture info`,
+        ].join('\n') + '\n',
+        stderr: '',
+        exitCode: 0,
+      };
+    }
 
     let idx = 0;
     while (idx < ctx.args.length) {

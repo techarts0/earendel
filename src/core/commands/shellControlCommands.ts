@@ -104,4 +104,58 @@ export const shellControlCommands: Command[] = [
       return await globalShellEngine.execute(content, [scriptPath, ...ctx.args.slice(1)]);
     },
   },
+  {
+    name: 'bats',
+    description: 'Bash Automated Testing System (TAP-compliant test runner)',
+    category: 'sys',
+    execute: async (ctx) => {
+      const target = ctx.args[0];
+      if (!target || target === '-h' || target === '--help') {
+        return {
+          stdout: [
+            '\x1b[1;36mBats (Bash Automated Testing System) v1.0.0\x1b[0m',
+            'Usage: bats <test_script.bats | test_script.sh> [options]',
+            '',
+            'Options:',
+            '  -t, --tap     Output in TAP (Test Anything Protocol) format',
+            '  -h, --help    Display help information',
+          ].join('\n') + '\n',
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+
+      const isTapOnly = ctx.args.includes('-t') || ctx.args.includes('--tap');
+      const testFile = ctx.args.find((a) => !a.startsWith('-'));
+
+      if (!testFile) {
+        return { stdout: '', stderr: 'bats: error: no test file specified\n', exitCode: 1 };
+      }
+
+      const curDirName = ctx.vfs.currentDirectory?.name || '/home/hello';
+      const absPath = testFile.startsWith('/') ? testFile : `${curDirName}/${testFile}`.replace(/\/+/g, '/');
+      const node = ctx.vfs.getNodeByPath(absPath);
+      if (!node || node.type !== 'file') {
+        return { stdout: '', stderr: `bats: error: file '${testFile}' not found\n`, exitCode: 1 };
+      }
+
+      const { BatsTestEngine } = await import('../batsTestEngine');
+      const cwd = absPath.substring(0, absPath.lastIndexOf('/')) || '/home/hello';
+      const outcome = await BatsTestEngine.runBatsScript(node.content || '', ctx, { cwd });
+
+      if (isTapOnly) {
+        return {
+          stdout: outcome.tapOutput + '\n',
+          stderr: '',
+          exitCode: outcome.exitCode,
+        };
+      }
+
+      return {
+        stdout: outcome.logs + '\n',
+        stderr: '',
+        exitCode: outcome.exitCode,
+      };
+    },
+  },
 ];

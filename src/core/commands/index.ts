@@ -39,6 +39,7 @@ import { skillCommand } from './skillCommands';
 import { mcpCommand } from './mcpCommands';
 import { halCommands } from './halCommands';
 import { guiCommands } from './guiCommands';
+import { lmsCommands } from './lmsCommands';
 
 export function registerAllCommands(): void {
   const allSuites = [
@@ -84,6 +85,7 @@ export function registerAllCommands(): void {
     mcpCommand,
     ...halCommands,
     ...guiCommands,
+    ...lmsCommands,
   ];
 
   for (const cmd of allSuites) {
