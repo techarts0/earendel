@@ -446,5 +446,111 @@ export const userCommands: Command[] = [
       return { stdout: `${user.padEnd(10)} tty1         ${nowStr} (:0)\n`, stderr: '', exitCode: 0 };
     },
   },
+  {
+    name: 'id',
+    description: 'Print real and effective user and group IDs (-u, -g, -G, -n, -r)',
+    category: 'sys',
+    execute: (ctx) => {
+      const flags = new Set<string>();
+      let targetUser: string | null = null;
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg.startsWith('--')) {
+          flags.add(arg.slice(2));
+        } else if (arg.startsWith('-') && arg.length > 1) {
+          for (let j = 1; j < arg.length; j++) flags.add(arg[j]);
+        } else if (!targetUser) {
+          targetUser = arg;
+        }
+      }
+
+      const currentUser = ctx.env['USER'] || 'hello';
+      const username = targetUser || currentUser;
+
+      const passwdContent = ctx.vfs.readFile('/etc/passwd') ?? '';
+      let uid = username === 'root' ? 0 : 1000;
+      let gid = username === 'root' ? 0 : 1000;
+      let userFound = username === 'root' || username === 'hello';
+
+      const passwdLines = passwdContent.split('\n');
+      for (const line of passwdLines) {
+        const parts = line.split(':');
+        if (parts[0] === username) {
+          userFound = true;
+          const parsedUid = parseInt(parts[2], 10);
+          const parsedGid = parseInt(parts[3], 10);
+          if (!isNaN(parsedUid)) uid = parsedUid;
+          if (!isNaN(parsedGid)) gid = parsedGid;
+          break;
+        }
+      }
+
+      if (!userFound && passwdContent.length > 0) {
+        return { stdout: '', stderr: `id: '${username}': no such user\n`, exitCode: 1 };
+      }
+
+      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      const groupLines = groupContent.split('\n');
+      const userGroups: { gid: number; name: string }[] = [];
+
+      // Primary group
+      let primaryGroupName = username;
+      for (const line of groupLines) {
+        const parts = line.split(':');
+        if (parseInt(parts[2], 10) === gid) {
+          primaryGroupName = parts[0];
+          break;
+        }
+      }
+      userGroups.push({ gid, name: primaryGroupName });
+
+      // Supplementary groups
+      for (const line of groupLines) {
+        const parts = line.split(':');
+        if (parts[0] && parts[2] && parts[3]) {
+          const gId = parseInt(parts[2], 10);
+          const gMembers = parts[3].split(',').map((m) => m.trim());
+          if (gMembers.includes(username) && gId !== gid) {
+            userGroups.push({ gid: gId, name: parts[0] });
+          }
+        }
+      }
+
+      // If user is hello or root and groups are empty in simulated VFS, add standard system groups
+      if (userGroups.length === 1 && username === 'hello') {
+        const defaultGroups = [
+          { gid: 4, name: 'adm' },
+          { gid: 24, name: 'cdrom' },
+          { gid: 27, name: 'sudo' },
+          { gid: 30, name: 'dip' },
+          { gid: 46, name: 'plugdev' },
+        ];
+        userGroups.push(...defaultGroups);
+      }
+
+      const onlyUser = flags.has('u') || flags.has('user');
+      const onlyGroup = flags.has('g') || flags.has('group');
+      const allGroups = flags.has('G') || flags.has('groups');
+      const nameOnly = flags.has('n') || flags.has('name');
+
+      if (onlyUser) {
+        return { stdout: (nameOnly ? username : uid.toString()) + '\n', stderr: '', exitCode: 0 };
+      }
+      if (onlyGroup) {
+        return { stdout: (nameOnly ? primaryGroupName : gid.toString()) + '\n', stderr: '', exitCode: 0 };
+      }
+      if (allGroups) {
+        const outStr = nameOnly ? userGroups.map((g) => g.name).join(' ') : userGroups.map((g) => g.gid).join(' ');
+        return { stdout: outStr + '\n', stderr: '', exitCode: 0 };
+      }
+
+      // Default full id output format: uid=1000(hello) gid=1000(hello) groups=1000(hello),4(adm),...
+      const groupsStr = userGroups.map((g) => `${g.gid}(${g.name})`).join(',');
+      const fullOut = `uid=${uid}(${username}) gid=${gid}(${primaryGroupName}) groups=${groupsStr}\n`;
+
+      return { stdout: fullOut, stderr: '', exitCode: 0 };
+    },
+  },
 ];
 
