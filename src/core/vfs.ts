@@ -861,7 +861,13 @@ constraints:
     const node = this.getNodeByPath(absPath);
     if (!node) return false;
 
-    const [owner, group] = ownerGroupStr.split(':');
+    let owner = ownerGroupStr;
+    let group = '';
+    if (ownerGroupStr.includes(':')) {
+      [owner, group] = ownerGroupStr.split(':');
+    } else if (ownerGroupStr.includes('.')) {
+      [owner, group] = ownerGroupStr.split('.');
+    }
 
     const applyChown = (targetNode: VFSNode, nodeAbsPath: string) => {
       if (owner) targetNode.owner = owner;

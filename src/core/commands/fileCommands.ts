@@ -4,6 +4,32 @@ import { VFSNode } from '../vfs';
 import { syscall } from '../../kernel/syscall';
 import { SyscallNo } from '../../kernel/types';
 
+// Helper for POSIX option parsing
+function parseFlags(args: string[]) {
+  const flags = new Set<string>();
+  const positional: string[] = [];
+  let endOfOptions = false;
+
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (endOfOptions) {
+      positional.push(arg);
+    } else if (arg === '--') {
+      endOfOptions = true;
+    } else if (arg.startsWith('--')) {
+      flags.add(arg.slice(2));
+    } else if (arg.startsWith('-') && arg.length > 1) {
+      for (let j = 1; j < arg.length; j++) {
+        flags.add(arg[j]);
+      }
+    } else {
+      positional.push(arg);
+    }
+  }
+
+  return { flags, positional };
+}
+
 export const fileCommands: Command[] = [
   {
     name: 'pwd',
@@ -18,55 +44,166 @@ export const fileCommands: Command[] = [
     description: 'List directory contents with permissions and details',
     category: 'file',
     execute: async (ctx) => {
-      const showAll = ctx.args.includes('-a') || ctx.args.includes('-la') || ctx.args.includes('-al');
-      const showLong = ctx.args.includes('-l') || ctx.args.includes('-la') || ctx.args.includes('-al');
-      const pathArg = ctx.args.find((a) => !a.startsWith('-')) || '.';
+      const { flags, positional } = parseFlags(ctx.args);
+      const showAll = flags.has('a') || flags.has('all');
+      const almostAll = flags.has('A') || flags.has('almost-all');
+      const showLong = flags.has('l');
+      const humanReadable = flags.has('h') || flags.has('human-readable');
+      const onePerLine = flags.has('1');
+      const sortByTime = flags.has('t');
+      const sortBySize = flags.has('S');
+      const reverseSort = flags.has('r') || flags.has('reverse');
+      const directorySelf = flags.has('d') || flags.has('directory');
+      const classify = flags.has('F') || flags.has('classify');
 
-      const openRes = await syscall(SyscallNo.SYS_OPEN, pathArg, 0);
-      await syscall(SyscallNo.SYS_STAT, pathArg);
+      const targetPaths = positional.length > 0 ? positional : ['.'];
+      const multiTargets = targetPaths.length > 1;
 
-      const targetNode = ctx.vfs.getNodeByPath(pathArg);
-      if (!targetNode) {
-        if (openRes.data !== undefined) await syscall(SyscallNo.SYS_CLOSE, openRes.data);
-        return { stdout: '', stderr: `ls: cannot access '${pathArg}': No such file or directory\n`, exitCode: 2 };
-      }
+      let totalStdout = '';
+      let totalStderr = '';
+      let exitCode = 0;
 
-      if (openRes.data !== undefined) {
-        await syscall(SyscallNo.SYS_CLOSE, openRes.data);
-      }
+      const formatSize = (bytes: number) => {
+        if (!humanReadable) return bytes.toString().padStart(6, ' ');
+        if (bytes < 1024) return `${bytes}`.padStart(5, ' ');
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)}K`.padStart(5, ' ');
+        if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)}M`.padStart(5, ' ');
+        return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)}G`.padStart(5, ' ');
+      };
 
-      if (targetNode.type === 'file') {
-        return { stdout: targetNode.name + '\n', stderr: '', exitCode: 0 };
-      }
-
-      if (!targetNode.children) {
-        return { stdout: '', stderr: '', exitCode: 0 };
-      }
-
-      let entries = Array.from(targetNode.children.values());
-      if (!showAll) {
-        entries = entries.filter((e) => !e.name.startsWith('.'));
-      }
-
-      if (showLong) {
-        let output = `total ${entries.length * 4}\n`;
-        for (const entry of entries) {
-          const isDir = entry.type === 'directory' ? 'd' : '-';
-          const perm = isDir + entry.permissions;
-          const size = entry.size.toString().padStart(6, ' ');
-          const dateStr = entry.updatedAt.toLocaleDateString(ctx.lang === 'zh' ? 'zh-CN' : 'en-US', {
-            month: 'short',
-            day: 'numeric',
-            hour: '2-digit',
-            minute: '2-digit',
-          });
-          output += `${perm} 1 ${entry.owner} ${entry.group} ${size} ${dateStr} ${entry.name}\n`;
+      const formatEntryName = (entry: VFSNode) => {
+        let name = entry.name;
+        if (classify) {
+          if (entry.type === 'directory') name += '/';
+          else if (entry.type === 'symlink') name += '@';
+          else if (entry.permissions.includes('x')) name += '*';
         }
-        return { stdout: output, stderr: '', exitCode: 0 };
-      } else {
-        const names = entries.map((e) => e.name).join('  ');
-        return { stdout: names ? names + '\n' : '', stderr: '', exitCode: 0 };
+        return name;
+      };
+
+      for (let pIdx = 0; pIdx < targetPaths.length; pIdx++) {
+        const pathArg = targetPaths[pIdx];
+        const openRes = await syscall(SyscallNo.SYS_OPEN, pathArg, 0);
+        await syscall(SyscallNo.SYS_STAT, pathArg);
+
+        const targetNode = ctx.vfs.getNodeByPath(pathArg);
+        if (!targetNode) {
+          if (openRes.data !== undefined) await syscall(SyscallNo.SYS_CLOSE, openRes.data);
+          totalStderr += `ls: cannot access '${pathArg}': No such file or directory\n`;
+          exitCode = 2;
+          continue;
+        }
+
+        if (openRes.data !== undefined) {
+          await syscall(SyscallNo.SYS_CLOSE, openRes.data);
+        }
+
+        if (targetNode.type === 'file' || directorySelf) {
+          if (showLong) {
+            const isDir = targetNode.type === 'directory' ? 'd' : targetNode.type === 'symlink' ? 'l' : '-';
+            const perm = isDir + targetNode.permissions;
+            const size = formatSize(targetNode.size);
+            const dateStr = targetNode.updatedAt.toLocaleDateString(ctx.lang === 'zh' ? 'zh-CN' : 'en-US', {
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            });
+            const displayName = formatEntryName(targetNode);
+            const linkTarget = targetNode.symlinkTarget ? ` -> ${targetNode.symlinkTarget}` : '';
+            totalStdout += `${perm} 1 ${targetNode.owner} ${targetNode.group} ${size} ${dateStr} ${displayName}${linkTarget}\n`;
+          } else {
+            totalStdout += formatEntryName(targetNode) + '\n';
+          }
+          continue;
+        }
+
+        if (multiTargets) {
+          if (totalStdout.length > 0 && !totalStdout.endsWith('\n\n')) {
+            totalStdout += '\n';
+          }
+          totalStdout += `${pathArg}:\n`;
+        }
+
+        if (!targetNode.children) {
+          continue;
+        }
+
+        let entries = Array.from(targetNode.children.values());
+
+        // Filter hidden files
+        if (showAll) {
+          const dotNode: VFSNode = {
+            id: 'dot',
+            name: '.',
+            type: 'directory',
+            permissions: targetNode.permissions,
+            owner: targetNode.owner,
+            group: targetNode.group,
+            size: targetNode.size,
+            updatedAt: targetNode.updatedAt,
+            parent: targetNode.parent,
+          };
+          const dotDotNode: VFSNode = {
+            id: 'dotdot',
+            name: '..',
+            type: 'directory',
+            permissions: targetNode.parent ? targetNode.parent.permissions : targetNode.permissions,
+            owner: targetNode.parent ? targetNode.parent.owner : targetNode.owner,
+            group: targetNode.parent ? targetNode.parent.group : targetNode.group,
+            size: targetNode.parent ? targetNode.parent.size : targetNode.size,
+            updatedAt: targetNode.parent ? targetNode.parent.updatedAt : targetNode.updatedAt,
+            parent: targetNode.parent,
+          };
+          entries = [dotNode, dotDotNode, ...entries];
+        } else if (!almostAll) {
+          entries = entries.filter((e) => !e.name.startsWith('.'));
+        }
+
+        // Sorting
+        if (sortByTime) {
+          entries.sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime());
+        } else if (sortBySize) {
+          entries.sort((a, b) => b.size - a.size);
+        } else {
+          entries.sort((a, b) => a.name.localeCompare(b.name));
+        }
+
+        if (reverseSort) {
+          entries.reverse();
+        }
+
+        if (showLong) {
+          let totalBlocks = 0;
+          for (const entry of entries) {
+            totalBlocks += Math.max(4, Math.ceil(entry.size / 1024) * 4);
+          }
+          totalStdout += `total ${totalBlocks}\n`;
+          for (const entry of entries) {
+            const isDir = entry.type === 'directory' ? 'd' : entry.type === 'symlink' ? 'l' : '-';
+            const perm = isDir + entry.permissions;
+            const size = formatSize(entry.size);
+            const dateStr = entry.updatedAt.toLocaleDateString(ctx.lang === 'zh' ? 'zh-CN' : 'en-US', {
+              month: 'short',
+              day: 'numeric',
+              hour: '2-digit',
+              minute: '2-digit',
+            });
+            const displayName = formatEntryName(entry);
+            const linkTarget = entry.symlinkTarget ? ` -> ${entry.symlinkTarget}` : '';
+            totalStdout += `${perm} 1 ${entry.owner} ${entry.group} ${size} ${dateStr} ${displayName}${linkTarget}\n`;
+          }
+        } else if (onePerLine) {
+          for (const entry of entries) {
+            totalStdout += formatEntryName(entry) + '\n';
+          }
+        } else {
+          const names = entries.map(formatEntryName).join('  ');
+          if (names) totalStdout += names + '\n';
+        }
       }
+
+      return { stdout: totalStdout, stderr: totalStderr, exitCode };
     },
   },
   {
@@ -81,15 +218,19 @@ export const fileCommands: Command[] = [
         targetPath = homeDir;
       } else if (targetPath.startsWith('~/')) {
         targetPath = homeDir + targetPath.slice(1);
+      } else if (targetPath === '-') {
+        targetPath = ctx.env['OLDPWD'] || homeDir;
       }
       const targetNode = ctx.vfs.getNodeByPath(targetPath, user);
       if (targetNode && !ctx.vfs.checkPermission(targetNode, 'x', user)) {
         return { stdout: '', stderr: `bash: cd: ${targetPath}: Permission denied\n`, exitCode: 1 };
       }
+      const prevPwd = ctx.vfs.getPwd();
       const ok = ctx.vfs.changeDirectory(targetPath, user);
       if (!ok) {
         return { stdout: '', stderr: `bash: cd: ${targetPath}: No such file or directory\n`, exitCode: 1 };
       }
+      ctx.env['OLDPWD'] = prevPwd;
       ctx.env['PWD'] = ctx.vfs.getPwd();
       return { stdout: '', stderr: '', exitCode: 0 };
     },
@@ -99,36 +240,102 @@ export const fileCommands: Command[] = [
     description: 'Create directory',
     category: 'file',
     execute: async (ctx) => {
-      if (ctx.args.length === 0) {
-        return { stdout: '', stderr: 'mkdir: missing operand\n', exitCode: 1 };
+      const { flags, positional } = parseFlags(ctx.args);
+      const pFlag = flags.has('p') || flags.has('parents');
+      const vFlag = flags.has('v') || flags.has('verbose');
+
+      // Mode option parsing: -m 755 or --mode=755
+      let customMode: string | null = null;
+      for (let i = 0; i < ctx.args.length; i++) {
+        if (ctx.args[i] === '-m' || ctx.args[i] === '--mode') {
+          customMode = ctx.args[i + 1] || null;
+        } else if (ctx.args[i].startsWith('-m=')) {
+          customMode = ctx.args[i].slice(3);
+        } else if (ctx.args[i].startsWith('--mode=')) {
+          customMode = ctx.args[i].slice(7);
+        }
       }
-      const pFlag = ctx.args.includes('-p');
-      const dirName = ctx.args.find((a) => !a.startsWith('-')) || '';
-      await syscall(SyscallNo.SYS_STAT, dirName);
-      const ok = ctx.vfs.mkdir(dirName, pFlag);
-      if (!ok) {
-        return { stdout: '', stderr: `mkdir: cannot create directory '${dirName}': File exists or invalid path\n`, exitCode: 1 };
+
+      if (positional.length === 0) {
+        return { stdout: '', stderr: 'mkdir: missing operand\nTry \'mkdir --help\' for more information.\n', exitCode: 1 };
       }
-      return { stdout: '', stderr: '', exitCode: 0 };
+
+      let stdout = '';
+      let stderr = '';
+      let exitCode = 0;
+
+      for (const dirName of positional) {
+        if (dirName === customMode) continue;
+        await syscall(SyscallNo.SYS_STAT, dirName);
+        const existingNode = ctx.vfs.getNodeByPath(dirName);
+        if (existingNode && !pFlag) {
+          stderr += `mkdir: cannot create directory '${dirName}': File exists\n`;
+          exitCode = 1;
+          continue;
+        }
+
+        const ok = ctx.vfs.mkdir(dirName, pFlag);
+        if (!ok) {
+          stderr += `mkdir: cannot create directory '${dirName}': No such file or directory or invalid path\n`;
+          exitCode = 1;
+        } else {
+          if (customMode) {
+            ctx.vfs.chmod(dirName, customMode, false);
+          }
+          if (vFlag) {
+            stdout += `mkdir: created directory '${dirName}'\n`;
+          }
+        }
+      }
+
+      return { stdout, stderr, exitCode };
     },
   },
-
   {
     name: 'touch',
     description: 'Change file timestamps or create empty file',
     category: 'file',
     execute: async (ctx) => {
-      if (ctx.args.length === 0) return { stdout: '', stderr: 'touch: missing operand\n', exitCode: 1 };
+      const { flags, positional } = parseFlags(ctx.args);
+      const noCreate = flags.has('c') || flags.has('h') || flags.has('no-create');
+
+      // Reference file parsing: -r <ref_file>
+      let refFile: string | null = null;
+      for (let i = 0; i < ctx.args.length; i++) {
+        if (ctx.args[i] === '-r' || ctx.args[i] === '--reference') {
+          refFile = ctx.args[i + 1] || null;
+        } else if (ctx.args[i].startsWith('--reference=')) {
+          refFile = ctx.args[i].slice(12);
+        }
+      }
+
+      let timestamp = new Date();
+      if (refFile) {
+        const refNode = ctx.vfs.getNodeByPath(refFile);
+        if (refNode) {
+          timestamp = refNode.updatedAt;
+        } else {
+          return { stdout: '', stderr: `touch: failed to get attributes of '${refFile}': No such file or directory\n`, exitCode: 1 };
+        }
+      }
+
+      const fileTargets = positional.filter((p) => p !== refFile);
+      if (fileTargets.length === 0) {
+        return { stdout: '', stderr: 'touch: missing operand\nTry \'touch --help\' for more information.\n', exitCode: 1 };
+      }
+
       const user = ctx.env['USER'] || 'hello';
-      for (const filename of ctx.args) {
-        if (!filename.startsWith('-')) {
-          const existing = ctx.vfs.readFile(filename, user);
-          if (existing === null) {
+      for (const filename of fileTargets) {
+        const existing = ctx.vfs.readFile(filename, user);
+        if (existing === null) {
+          if (!noCreate) {
             await syscall(SyscallNo.SYS_WRITE, filename, '');
-          } else {
             const node = ctx.vfs.getNodeByPath(filename);
-            if (node) node.updatedAt = new Date();
+            if (node) node.updatedAt = timestamp;
           }
+        } else {
+          const node = ctx.vfs.getNodeByPath(filename);
+          if (node) node.updatedAt = timestamp;
         }
       }
       return { stdout: '', stderr: '', exitCode: 0 };
@@ -139,26 +346,90 @@ export const fileCommands: Command[] = [
     description: 'Concatenate files and print on standard output',
     category: 'file',
     execute: async (ctx) => {
-      if (ctx.pipeInput) {
-        return { stdout: ctx.pipeInput, stderr: '', exitCode: 0 };
-      }
-      if (ctx.args.length === 0) {
-        return { stdout: '', stderr: 'cat: missing operand\n', exitCode: 1 };
-      }
-      let out = '';
+      const { flags, positional } = parseFlags(ctx.args);
+      const numberAll = flags.has('n') || flags.has('number');
+      const numberNonBlank = flags.has('b') || flags.has('number-nonblank');
+      const squeezeBlank = flags.has('s') || flags.has('squeeze-blank');
+      const showEnds = flags.has('E') || flags.has('show-ends') || flags.has('A') || flags.has('show-all');
+      const showTabs = flags.has('T') || flags.has('show-tabs') || flags.has('A') || flags.has('show-all');
+
+      const rawInputs: string[] = [];
       const user = ctx.env['USER'] || 'hello';
-      for (const arg of ctx.args) {
-        const node = ctx.vfs.getNodeByPath(arg);
-        if (node && !ctx.vfs.checkPermission(node, 'r', user)) {
-          return { stdout: '', stderr: `cat: ${arg}: Permission denied\n`, exitCode: 1 };
+
+      if (positional.length === 0 || (positional.length === 1 && positional[0] === '-')) {
+        if (ctx.pipeInput !== undefined) {
+          rawInputs.push(ctx.pipeInput);
+        } else {
+          return { stdout: '', stderr: '', exitCode: 0 };
         }
-        const readRes = await syscall(SyscallNo.SYS_READ, arg);
-        if (readRes.code !== 0 || readRes.data === null || readRes.data === undefined) {
-          return { stdout: '', stderr: `cat: ${arg}: No such file or directory\n`, exitCode: 1 };
+      } else {
+        let stderr = '';
+        let exitCode = 0;
+        for (const arg of positional) {
+          if (arg === '-') {
+            rawInputs.push(ctx.pipeInput || '');
+            continue;
+          }
+          const node = ctx.vfs.getNodeByPath(arg);
+          if (node && !ctx.vfs.checkPermission(node, 'r', user)) {
+            stderr += `cat: ${arg}: Permission denied\n`;
+            exitCode = 1;
+            continue;
+          }
+          const readRes = await syscall(SyscallNo.SYS_READ, arg);
+          if (readRes.code !== 0 || readRes.data === null || readRes.data === undefined) {
+            stderr += `cat: ${arg}: No such file or directory\n`;
+            exitCode = 1;
+            continue;
+          }
+          rawInputs.push(readRes.data ?? '');
         }
-        out += readRes.data ?? '';
+
+        if (exitCode !== 0 && rawInputs.length === 0) {
+          return { stdout: '', stderr, exitCode };
+        }
       }
-      return { stdout: out.endsWith('\n') ? out : out + '\n', stderr: '', exitCode: 0 };
+
+      let lineCount = 1;
+      const outputLines: string[] = [];
+      let prevBlank = false;
+
+      for (const content of rawInputs) {
+        const lines = content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          let line = lines[i];
+          const isBlank = line.trim() === '';
+
+          if (squeezeBlank && isBlank && prevBlank) {
+            continue;
+          }
+          prevBlank = isBlank;
+
+          if (showTabs) {
+            line = line.replace(/\t/g, '^I');
+          }
+          if (showEnds) {
+            line = line + '$';
+          }
+
+          if (numberNonBlank) {
+            if (!isBlank) {
+              outputLines.push(`${lineCount.toString().padStart(6, ' ')}\t${line}`);
+              lineCount++;
+            } else {
+              outputLines.push(line);
+            }
+          } else if (numberAll) {
+            outputLines.push(`${lineCount.toString().padStart(6, ' ')}\t${line}`);
+            lineCount++;
+          } else {
+            outputLines.push(line);
+          }
+        }
+      }
+
+      const res = outputLines.join('\n');
+      return { stdout: res.endsWith('\n') ? res : res + '\n', stderr: '', exitCode: 0 };
     },
     executeStream: async function* (ctx, inputStream) {
       if (inputStream) {
@@ -166,14 +437,13 @@ export const fileCommands: Command[] = [
           yield chunk;
         }
       }
-      for (const arg of ctx.args) {
-        if (!arg.startsWith('-')) {
-          const content = ctx.vfs.readFile(arg, ctx.env['USER'] || 'hello');
-          if (content !== null) {
-            const lines = content.split('\n');
-            for (let i = 0; i < lines.length; i++) {
-              yield lines[i] + (i < lines.length - 1 ? '\n' : '');
-            }
+      const { positional } = parseFlags(ctx.args);
+      for (const arg of positional) {
+        const content = ctx.vfs.readFile(arg, ctx.env['USER'] || 'hello');
+        if (content !== null) {
+          const lines = content.split('\n');
+          for (let i = 0; i < lines.length; i++) {
+            yield lines[i] + (i < lines.length - 1 ? '\n' : '');
           }
         }
       }
@@ -181,45 +451,67 @@ export const fileCommands: Command[] = [
   },
   {
     name: 'chmod',
-    description: 'Change file mode bits (permissions)',
+    description: 'Change file mode bits (supports octal 755, symbolic u+x, -R, -v, -c, -f)',
     category: 'file',
     execute: (ctx) => {
-      const recursive = ctx.args.includes('-R') || ctx.args.includes('-r');
-      const mode = ctx.args.find((a) => !a.startsWith('-'));
-      const target = ctx.args.slice(ctx.args.indexOf(mode!) + 1).find((a) => !a.startsWith('-'));
+      const flags = new Set<string>();
+      let mode: string | null = null;
+      const targets: string[] = [];
 
-      if (!mode || !target) {
-        return { stdout: '', stderr: 'chmod: missing operand\nUsage: chmod [-R] MODE FILE\n', exitCode: 1 };
-      }
-      const ok = ctx.vfs.chmod(target, mode, recursive);
-      if (!ok) {
-        return { stdout: '', stderr: `chmod: cannot change permissions of '${target}': No such file or directory\n`, exitCode: 1 };
-      }
-      return { stdout: '', stderr: '', exitCode: 0 };
-    },
-  },
-  {
-    name: 'find',
-    description: 'Search for files in a directory hierarchy',
-    category: 'file',
-    execute: (ctx) => {
-      const nameArgIdx = ctx.args.indexOf('-name');
-      const targetPattern = nameArgIdx !== -1 ? ctx.args[nameArgIdx + 1]?.replace(/^["']|["']$/g, '') : null;
-
-      const results: string[] = [];
-      const walk = (node: VFSNode, currPath: string) => {
-        if (!targetPattern || node.name.includes(targetPattern.replace(/\*/g, ''))) {
-          results.push(currPath);
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg.startsWith('--')) {
+          flags.add(arg.slice(2));
+        } else if (arg.startsWith('-') && arg.length > 1 && !/^[0-7]+$/.test(arg.slice(1))) {
+          for (let j = 1; j < arg.length; j++) flags.add(arg[j]);
+        } else if (!mode) {
+          mode = arg;
+        } else {
+          targets.push(arg);
         }
-        if (node.type === 'directory' && node.children) {
-          for (const child of node.children.values()) {
-            walk(child, currPath === '/' ? `/${child.name}` : `${currPath}/${child.name}`);
+      }
+
+      if (!mode || targets.length === 0) {
+        return { stdout: '', stderr: 'chmod: missing operand\nTry \'chmod --help\' for more information.\n', exitCode: 1 };
+      }
+
+      const recursive = flags.has('R') || flags.has('r') || flags.has('recursive');
+      const verbose = flags.has('v') || flags.has('verbose');
+      const changesOnly = flags.has('c') || flags.has('changes');
+      const silent = flags.has('f') || flags.has('silent') || flags.has('quiet');
+
+      let totalStdout = '';
+      let totalStderr = '';
+      let exitCode = 0;
+
+      for (const target of targets) {
+        const node = ctx.vfs.getNodeByPath(target);
+        if (!node) {
+          if (!silent) {
+            totalStderr += `chmod: cannot access '${target}': No such file or directory\n`;
+          }
+          exitCode = 1;
+          continue;
+        }
+
+        const oldPerms = node.permissions;
+        const ok = ctx.vfs.chmod(target, mode, recursive);
+        if (!ok) {
+          if (!silent) {
+            totalStderr += `chmod: changing permissions of '${target}': Operation not permitted\n`;
+          }
+          exitCode = 1;
+        } else {
+          const newPerms = node.permissions;
+          if (verbose) {
+            totalStdout += `mode of '${target}' changed from ${oldPerms} to ${newPerms}\n`;
+          } else if (changesOnly && oldPerms !== newPerms) {
+            totalStdout += `mode of '${target}' changed to ${newPerms}\n`;
           }
         }
-      };
+      }
 
-      walk(ctx.vfs.currentDirectory, '.');
-      return { stdout: results.join('\n') + '\n', stderr: '', exitCode: 0 };
+      return { stdout: totalStdout, stderr: totalStderr, exitCode };
     },
   },
   {
@@ -227,9 +519,63 @@ export const fileCommands: Command[] = [
     description: 'Output the first part of files',
     category: 'file',
     execute: (ctx) => {
-      const text = ctx.pipeInput || (ctx.args[0] ? (ctx.vfs.readFile(ctx.args[0]) ?? '') : '');
-      const lines = text.split('\n').slice(0, 10);
-      return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+      const { flags, positional } = parseFlags(ctx.args);
+      let numLines = 10;
+      let numBytes: number | null = null;
+      const quiet = flags.has('q') || flags.has('quiet') || flags.has('silent');
+      const verbose = flags.has('v') || flags.has('verbose');
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg.startsWith('-n')) {
+          const val = arg === '-n' ? ctx.args[i + 1] : arg.slice(2);
+          if (val) numLines = parseInt(val, 10) || 10;
+        } else if (/^-\d+$/.test(arg)) {
+          numLines = parseInt(arg.slice(1), 10) || 10;
+        } else if (arg.startsWith('-c')) {
+          const val = arg === '-c' ? ctx.args[i + 1] : arg.slice(2);
+          if (val) numBytes = parseInt(val, 10);
+        }
+      }
+
+      const files = positional;
+      if (files.length === 0 || (files.length === 1 && files[0] === '-')) {
+        const text = ctx.pipeInput ?? '';
+        if (numBytes !== null) {
+          return { stdout: text.slice(0, numBytes), stderr: '', exitCode: 0 };
+        }
+        const lines = text.split('\n').slice(0, numLines);
+        return { stdout: lines.join('\n') + (text ? '\n' : ''), stderr: '', exitCode: 0 };
+      }
+
+      let stdout = '';
+      let stderr = '';
+      let exitCode = 0;
+      const showHeader = (files.length > 1 || verbose) && !quiet;
+
+      for (let i = 0; i < files.length; i++) {
+        const filename = files[i];
+        const text = ctx.vfs.readFile(filename, ctx.env['USER'] || 'hello');
+        if (text === null) {
+          stderr += `head: cannot open '${filename}' for reading: No such file or directory\n`;
+          exitCode = 1;
+          continue;
+        }
+
+        if (showHeader) {
+          if (stdout.length > 0) stdout += '\n';
+          stdout += `==> ${filename} <==\n`;
+        }
+
+        if (numBytes !== null) {
+          stdout += text.slice(0, numBytes);
+        } else {
+          const lines = text.split('\n').slice(0, numLines);
+          stdout += lines.join('\n') + (text ? '\n' : '');
+        }
+      }
+
+      return { stdout, stderr, exitCode };
     },
     executeStream: async function* (ctx, inputStream) {
       let n = 10;
@@ -261,9 +607,73 @@ export const fileCommands: Command[] = [
     description: 'Output the last part of files',
     category: 'file',
     execute: (ctx) => {
-      const text = ctx.pipeInput || (ctx.args[0] ? (ctx.vfs.readFile(ctx.args[0]) ?? '') : '');
-      const lines = text.split('\n').filter(Boolean).slice(-10);
-      return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+      const { flags, positional } = parseFlags(ctx.args);
+      let numLines = 10;
+      let fromStart = false;
+      let numBytes: number | null = null;
+      const quiet = flags.has('q') || flags.has('quiet') || flags.has('silent');
+      const verbose = flags.has('v') || flags.has('verbose');
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg.startsWith('-n')) {
+          const val = arg === '-n' ? ctx.args[i + 1] : arg.slice(2);
+          if (val) {
+            if (val.startsWith('+')) {
+              fromStart = true;
+              numLines = parseInt(val.slice(1), 10) || 1;
+            } else {
+              numLines = parseInt(val, 10) || 10;
+            }
+          }
+        } else if (/^-\d+$/.test(arg)) {
+          numLines = parseInt(arg.slice(1), 10) || 10;
+        } else if (arg.startsWith('-c')) {
+          const val = arg === '-c' ? ctx.args[i + 1] : arg.slice(2);
+          if (val) numBytes = parseInt(val, 10);
+        }
+      }
+
+      const files = positional;
+      if (files.length === 0 || (files.length === 1 && files[0] === '-')) {
+        const text = ctx.pipeInput ?? '';
+        if (numBytes !== null) {
+          return { stdout: text.slice(-numBytes), stderr: '', exitCode: 0 };
+        }
+        const allLines = text.split('\n');
+        const lines = fromStart ? allLines.slice(numLines - 1) : allLines.slice(-numLines);
+        return { stdout: lines.join('\n') + (text ? '\n' : ''), stderr: '', exitCode: 0 };
+      }
+
+      let stdout = '';
+      let stderr = '';
+      let exitCode = 0;
+      const showHeader = (files.length > 1 || verbose) && !quiet;
+
+      for (let i = 0; i < files.length; i++) {
+        const filename = files[i];
+        const text = ctx.vfs.readFile(filename, ctx.env['USER'] || 'hello');
+        if (text === null) {
+          stderr += `tail: cannot open '${filename}' for reading: No such file or directory\n`;
+          exitCode = 1;
+          continue;
+        }
+
+        if (showHeader) {
+          if (stdout.length > 0) stdout += '\n';
+          stdout += `==> ${filename} <==\n`;
+        }
+
+        if (numBytes !== null) {
+          stdout += text.slice(-numBytes);
+        } else {
+          const allLines = text.split('\n');
+          const lines = fromStart ? allLines.slice(numLines - 1) : allLines.slice(-numLines);
+          stdout += lines.join('\n') + (text ? '\n' : '');
+        }
+      }
+
+      return { stdout, stderr, exitCode };
     },
   },
   {
@@ -271,11 +681,75 @@ export const fileCommands: Command[] = [
     description: 'Print newline, word, and byte counts for each file',
     category: 'file',
     execute: (ctx) => {
-      const text = ctx.pipeInput || (ctx.args[0] ? (ctx.vfs.readFile(ctx.args[0]) ?? '') : '');
-      const lines = text.split('\n').filter(Boolean).length;
-      const words = text.split(/\s+/).filter(Boolean).length;
-      const chars = text.length;
-      return { stdout: `  ${lines}  ${words}  ${chars} ${ctx.args[0] || ''}\n`, stderr: '', exitCode: 0 };
+      const { flags, positional } = parseFlags(ctx.args);
+      let optLines = flags.has('l') || flags.has('lines');
+      let optWords = flags.has('w') || flags.has('words');
+      let optBytes = flags.has('c') || flags.has('bytes');
+      const optChars = flags.has('m') || flags.has('chars');
+      const optMaxLen = flags.has('L') || flags.has('max-line-length');
+
+      // Default if no flag is provided
+      if (!optLines && !optWords && !optBytes && !optChars && !optMaxLen) {
+        optLines = true;
+        optWords = true;
+        optBytes = true;
+      }
+
+      const countMetrics = (text: string) => {
+        const lineCount = (text.match(/\n/g) || []).length;
+        const wordCount = text.trim().length > 0 ? (text.trim().match(/\s+/g) || []).length + 1 : 0;
+        const byteCount = new TextEncoder().encode(text).length;
+        const charCount = text.length;
+        const maxLen = text.split('\n').reduce((max, l) => Math.max(max, l.length), 0);
+        return { lineCount, wordCount, byteCount, charCount, maxLen };
+      };
+
+      const formatLine = (counts: { lineCount: number; wordCount: number; byteCount: number; charCount: number; maxLen: number }, name?: string) => {
+        const parts: string[] = [];
+        if (optLines) parts.push(counts.lineCount.toString().padStart(8, ' '));
+        if (optWords) parts.push(counts.wordCount.toString().padStart(8, ' '));
+        if (optChars) parts.push(counts.charCount.toString().padStart(8, ' '));
+        if (optBytes) parts.push(counts.byteCount.toString().padStart(8, ' '));
+        if (optMaxLen) parts.push(counts.maxLen.toString().padStart(8, ' '));
+        if (name) parts.push(` ${name}`);
+        return parts.join('');
+      };
+
+      const files = positional;
+      if (files.length === 0 || (files.length === 1 && files[0] === '-')) {
+        const text = ctx.pipeInput ?? '';
+        const counts = countMetrics(text);
+        return { stdout: formatLine(counts) + '\n', stderr: '', exitCode: 0 };
+      }
+
+      let stdout = '';
+      let stderr = '';
+      let exitCode = 0;
+      const total = { lineCount: 0, wordCount: 0, byteCount: 0, charCount: 0, maxLen: 0 };
+
+      for (const filename of files) {
+        const text = ctx.vfs.readFile(filename, ctx.env['USER'] || 'hello');
+        if (text === null) {
+          stderr += `wc: ${filename}: No such file or directory\n`;
+          exitCode = 1;
+          continue;
+        }
+
+        const counts = countMetrics(text);
+        total.lineCount += counts.lineCount;
+        total.wordCount += counts.wordCount;
+        total.byteCount += counts.byteCount;
+        total.charCount += counts.charCount;
+        total.maxLen = Math.max(total.maxLen, counts.maxLen);
+
+        stdout += formatLine(counts, filename) + '\n';
+      }
+
+      if (files.length > 1) {
+        stdout += formatLine(total, 'total') + '\n';
+      }
+
+      return { stdout, stderr, exitCode };
     },
   },
   {
@@ -283,24 +757,63 @@ export const fileCommands: Command[] = [
     description: 'Remove files or directories',
     category: 'file',
     execute: (ctx) => {
-      const recursive = ctx.args.includes('-r') || ctx.args.includes('-rf') || ctx.args.includes('-fr') || ctx.args.includes('-r-f');
-      const target = ctx.args.find((a) => !a.startsWith('-'));
+      const { flags, positional } = parseFlags(ctx.args);
+      const recursive = flags.has('r') || flags.has('R') || flags.has('recursive');
+      const force = flags.has('f') || flags.has('force');
+      const removeDir = flags.has('d') || flags.has('dir');
+      const verbose = flags.has('v') || flags.has('verbose');
 
-      if (recursive && (target === '/' || target === '/*')) {
-        return {
-          stdout: `rm: it is dangerous to operate recursively on '/'\nrm: use --no-preserve-root to override this failsafe\n\n\x1b[1;31m[💥 NUCLEAR BOMB DETECTED]: System protected by Earendel Failsafe Protocol!\x1b[0m\nNice try! Operating system root directory remains safe. 🛡️\n`,
-          stderr: '',
-          exitCode: 1,
-        };
+      if (positional.length === 0) {
+        if (force) return { stdout: '', stderr: '', exitCode: 0 };
+        return { stdout: '', stderr: 'rm: missing operand\nTry \'rm --help\' for more information.\n', exitCode: 1 };
       }
 
-      if (!target) return { stdout: '', stderr: 'rm: missing operand\n', exitCode: 1 };
+      let stdout = '';
+      let stderr = '';
+      let exitCode = 0;
 
-      const ok = ctx.vfs.remove(target, recursive);
-      if (!ok) {
-        return { stdout: '', stderr: `rm: cannot remove '${target}': No such file or directory or non-empty directory\n`, exitCode: 1 };
+      for (const target of positional) {
+        if (recursive && (target === '/' || target === '/*')) {
+          stdout += `rm: it is dangerous to operate recursively on '/'\nrm: use --no-preserve-root to override this failsafe\n\n\x1b[1;31m[💥 NUCLEAR BOMB DETECTED]: System protected by Earendel Failsafe Protocol!\x1b[0m\nNice try! Operating system root directory remains safe. 🛡️\n`;
+          return { stdout, stderr: '', exitCode: 1 };
+        }
+
+        const node = ctx.vfs.getNodeByPath(target);
+        if (!node) {
+          if (!force) {
+            stderr += `rm: cannot remove '${target}': No such file or directory\n`;
+            exitCode = 1;
+          }
+          continue;
+        }
+
+        if (node.type === 'directory' && !recursive) {
+          if (removeDir) {
+            if (node.children && node.children.size > 0) {
+              stderr += `rm: cannot remove '${target}': Directory not empty\n`;
+              exitCode = 1;
+              continue;
+            }
+          } else {
+            stderr += `rm: cannot remove '${target}': Is a directory\n`;
+            exitCode = 1;
+            continue;
+          }
+        }
+
+        const isDir = node.type === 'directory';
+        const ok = ctx.vfs.remove(target, recursive || removeDir);
+        if (!ok) {
+          if (!force) {
+            stderr += `rm: cannot remove '${target}': No such file or directory or non-empty directory\n`;
+            exitCode = 1;
+          }
+        } else if (verbose) {
+          stdout += isDir ? `removed directory '${target}'\n` : `removed '${target}'\n`;
+        }
       }
-      return { stdout: '', stderr: '', exitCode: 0 };
+
+      return { stdout, stderr, exitCode };
     },
   },
   {
@@ -308,45 +821,93 @@ export const fileCommands: Command[] = [
     description: 'Copy files and directories',
     category: 'file',
     execute: (ctx) => {
-      const recursive = ctx.args.includes('-r') || ctx.args.includes('-R');
-      const nonFlagArgs = ctx.args.filter((a) => !a.startsWith('-'));
-      if (nonFlagArgs.length < 2) return { stdout: '', stderr: 'cp: missing file operand\nUsage: cp [-r] SOURCE DEST\n', exitCode: 1 };
-      const src = nonFlagArgs[0];
-      const dest = nonFlagArgs[1];
+      const { flags, positional } = parseFlags(ctx.args);
+      const recursive = flags.has('r') || flags.has('R') || flags.has('recursive') || flags.has('a') || flags.has('archive');
+      const verbose = flags.has('v') || flags.has('verbose');
+      const preserve = flags.has('p') || flags.has('a') || flags.has('archive');
 
-      const copyNode = (srcPath: string, destPath: string): boolean => {
+      if (positional.length < 2) {
+        return { stdout: '', stderr: 'cp: missing file operand\nTry \'cp --help\' for more information.\n', exitCode: 1 };
+      }
+
+      const sources = positional.slice(0, positional.length - 1);
+      const dest = positional[positional.length - 1];
+      const destNode = ctx.vfs.getNodeByPath(dest);
+
+      if (sources.length > 1 && (!destNode || destNode.type !== 'directory')) {
+        return { stdout: '', stderr: `cp: target '${dest}' is not a directory\n`, exitCode: 1 };
+      }
+
+      const copySingle = (srcPath: string, targetPath: string): boolean => {
         const srcNode = ctx.vfs.getNodeByPath(srcPath);
         if (!srcNode) return false;
 
         if (srcNode.type === 'directory') {
           if (!recursive) return false;
-          ctx.vfs.mkdir(destPath, true);
+          ctx.vfs.mkdir(targetPath, true);
+          const createdDir = ctx.vfs.getNodeByPath(targetPath);
+          if (createdDir && preserve) {
+            createdDir.permissions = srcNode.permissions;
+            createdDir.owner = srcNode.owner;
+            createdDir.group = srcNode.group;
+            createdDir.updatedAt = srcNode.updatedAt;
+          }
           if (srcNode.children) {
             for (const child of srcNode.children.values()) {
-              copyNode(`${srcPath}/${child.name}`, `${destPath}/${child.name}`);
+              copySingle(`${srcPath}/${child.name}`, `${targetPath}/${child.name}`);
             }
           }
           return true;
+        } else if (srcNode.type === 'symlink') {
+          ctx.vfs.symlink(srcNode.symlinkTarget || '', targetPath);
+          return true;
         } else {
-          ctx.vfs.writeFile(destPath, srcNode.content ?? '');
+          ctx.vfs.writeFile(targetPath, srcNode.content ?? '');
+          const copiedNode = ctx.vfs.getNodeByPath(targetPath);
+          if (copiedNode && preserve) {
+            copiedNode.permissions = srcNode.permissions;
+            copiedNode.owner = srcNode.owner;
+            copiedNode.group = srcNode.group;
+            copiedNode.updatedAt = srcNode.updatedAt;
+          }
           return true;
         }
       };
 
-      const srcNode = ctx.vfs.getNodeByPath(src);
-      if (!srcNode) {
-        return { stdout: '', stderr: `cp: cannot stat '${src}': No such file or directory\n`, exitCode: 1 };
+      let stdout = '';
+      let stderr = '';
+      let exitCode = 0;
+
+      for (const src of sources) {
+        const srcNode = ctx.vfs.getNodeByPath(src);
+        if (!srcNode) {
+          stderr += `cp: cannot stat '${src}': No such file or directory\n`;
+          exitCode = 1;
+          continue;
+        }
+
+        if (srcNode.type === 'directory' && !recursive) {
+          stderr += `cp: -r not specified; omitting directory '${src}'\n`;
+          exitCode = 1;
+          continue;
+        }
+
+        let targetDest = dest;
+        if (destNode && destNode.type === 'directory') {
+          const baseName = src.split('/').filter(Boolean).pop() || src;
+          targetDest = dest.endsWith('/') ? `${dest}${baseName}` : `${dest}/${baseName}`;
+        }
+
+        const ok = copySingle(src, targetDest);
+        if (!ok) {
+          stderr += `cp: failed to copy '${src}' to '${targetDest}'\n`;
+          exitCode = 1;
+        } else if (verbose) {
+          stdout += `'${src}' -> '${targetDest}'\n`;
+        }
       }
 
-      if (srcNode.type === 'directory' && !recursive) {
-        return { stdout: '', stderr: `cp: -r not specified; omitting directory '${src}'\n`, exitCode: 1 };
-      }
-
-      const ok = copyNode(src, dest);
-      if (!ok) {
-        return { stdout: '', stderr: `cp: failed to copy '${src}' to '${dest}'\n`, exitCode: 1 };
-      }
-      return { stdout: '', stderr: '', exitCode: 0 };
+      return { stdout, stderr, exitCode };
     },
   },
   {
@@ -354,37 +915,89 @@ export const fileCommands: Command[] = [
     description: 'Move (rename) files and directories',
     category: 'file',
     execute: (ctx) => {
-      const nonFlagArgs = ctx.args.filter((a) => !a.startsWith('-'));
-      if (nonFlagArgs.length < 2) return { stdout: '', stderr: 'mv: missing file operand\nUsage: mv SOURCE DEST\n', exitCode: 1 };
-      const src = nonFlagArgs[0];
-      const dest = nonFlagArgs[1];
+      const { flags, positional } = parseFlags(ctx.args);
+      const verbose = flags.has('v') || flags.has('verbose');
+      const noClobber = flags.has('n') || flags.has('no-clobber');
 
-      const srcNode = ctx.vfs.getNodeByPath(src);
-      if (!srcNode) {
-        return { stdout: '', stderr: `mv: cannot stat '${src}': No such file or directory\n`, exitCode: 1 };
+      if (positional.length < 2) {
+        return { stdout: '', stderr: 'mv: missing file operand\nTry \'mv --help\' for more information.\n', exitCode: 1 };
       }
 
-      const copyNode = (srcPath: string, destPath: string): boolean => {
+      const sources = positional.slice(0, positional.length - 1);
+      const dest = positional[positional.length - 1];
+      const destNode = ctx.vfs.getNodeByPath(dest);
+
+      if (sources.length > 1 && (!destNode || destNode.type !== 'directory')) {
+        return { stdout: '', stderr: `mv: target '${dest}' is not a directory\n`, exitCode: 1 };
+      }
+
+      const copySingle = (srcPath: string, targetPath: string): boolean => {
         const node = ctx.vfs.getNodeByPath(srcPath);
         if (!node) return false;
 
         if (node.type === 'directory') {
-          ctx.vfs.mkdir(destPath, true);
+          ctx.vfs.mkdir(targetPath, true);
+          const dirNode = ctx.vfs.getNodeByPath(targetPath);
+          if (dirNode) {
+            dirNode.permissions = node.permissions;
+            dirNode.owner = node.owner;
+            dirNode.group = node.group;
+            dirNode.updatedAt = node.updatedAt;
+          }
           if (node.children) {
             for (const child of node.children.values()) {
-              copyNode(`${srcPath}/${child.name}`, `${destPath}/${child.name}`);
+              copySingle(`${srcPath}/${child.name}`, `${targetPath}/${child.name}`);
             }
           }
           return true;
+        } else if (node.type === 'symlink') {
+          ctx.vfs.symlink(node.symlinkTarget || '', targetPath);
+          return true;
         } else {
-          ctx.vfs.writeFile(destPath, node.content ?? '');
+          ctx.vfs.writeFile(targetPath, node.content ?? '');
+          const fileNode = ctx.vfs.getNodeByPath(targetPath);
+          if (fileNode) {
+            fileNode.permissions = node.permissions;
+            fileNode.owner = node.owner;
+            fileNode.group = node.group;
+            fileNode.updatedAt = node.updatedAt;
+          }
           return true;
         }
       };
 
-      copyNode(src, dest);
-      ctx.vfs.remove(src, true);
-      return { stdout: '', stderr: '', exitCode: 0 };
+      let stdout = '';
+      let stderr = '';
+      let exitCode = 0;
+
+      for (const src of sources) {
+        const srcNode = ctx.vfs.getNodeByPath(src);
+        if (!srcNode) {
+          stderr += `mv: cannot stat '${src}': No such file or directory\n`;
+          exitCode = 1;
+          continue;
+        }
+
+        let targetDest = dest;
+        if (destNode && destNode.type === 'directory') {
+          const baseName = src.split('/').filter(Boolean).pop() || src;
+          targetDest = dest.endsWith('/') ? `${dest}${baseName}` : `${dest}/${baseName}`;
+        }
+
+        const existingTarget = ctx.vfs.getNodeByPath(targetDest);
+        if (existingTarget && noClobber) {
+          continue;
+        }
+
+        copySingle(src, targetDest);
+        ctx.vfs.remove(src, true);
+
+        if (verbose) {
+          stdout += `renamed '${src}' -> '${targetDest}'\n`;
+        }
+      }
+
+      return { stdout, stderr, exitCode };
     },
   },
   {

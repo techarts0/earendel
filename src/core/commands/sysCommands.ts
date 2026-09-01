@@ -11,25 +11,54 @@ import { globalTaskScheduler } from '../../kernel/taskScheduler';
 export const sysCommands: Command[] = [
   {
     name: 'ps',
-    description: 'Report a snapshot of the current processes',
+    description: 'Report a snapshot of the current processes (supports aux, -ef, -u, -p, -A, -e)',
     category: 'sys',
     execute: (ctx) => {
-      const aux = ctx.args.includes('aux') || ctx.args.includes('-ef');
-      const realProcs = globalTaskScheduler.getAllProcesses();
+      const isFull = ctx.args.includes('aux') || ctx.args.includes('-ef') || ctx.args.includes('-aux') || ctx.args.includes('-A') || ctx.args.includes('-e');
+      
+      let userFilter: string | null = null;
+      let pidFilter: number | null = null;
 
-      if (aux) {
+      for (let i = 0; i < ctx.args.length; i++) {
+        if (ctx.args[i] === '-u' && ctx.args[i + 1]) {
+          userFilter = ctx.args[i + 1];
+          i++;
+        } else if (ctx.args[i].startsWith('-u=')) {
+          userFilter = ctx.args[i].slice(3);
+        } else if (ctx.args[i] === '-p' && ctx.args[i + 1]) {
+          pidFilter = parseInt(ctx.args[i + 1], 10);
+          i++;
+        } else if (ctx.args[i].startsWith('-p=')) {
+          pidFilter = parseInt(ctx.args[i].slice(3), 10);
+        }
+      }
+
+      let realProcs = globalTaskScheduler.getAllProcesses();
+
+      if (userFilter) {
+        realProcs = realProcs.filter((p) => p.user === userFilter);
+      }
+      if (pidFilter !== null && !isNaN(pidFilter)) {
+        realProcs = realProcs.filter((p) => p.pid === pidFilter);
+      }
+
+      const currentUser = ctx.env['USER'] || 'hello';
+
+      if (isFull || userFilter || pidFilter !== null) {
         let out = 'USER         PID %CPU %MEM    VSZ   RSS TTY      STAT START   TIME COMMAND\n';
         for (const p of realProcs) {
           const cpu = p.cpuUsagePercent ? p.cpuUsagePercent.toFixed(1) : '0.0';
-          const mem = (p.rssKB / 1024 / 1024 * 100).toFixed(1);
+          const mem = ((p.rssKB / 1024 / 1024) * 100).toFixed(1);
           const statChar = p.state === 'RUNNING' ? 'R' : p.state === 'BLOCKED' ? 'T' : p.state === 'ZOMBIE' ? 'Z' : 'S';
           const timeStr = p.startTime ? p.startTime.toTimeString().substring(0, 5) : '00:00';
           out += `${p.user.padEnd(10, ' ')} ${p.pid.toString().padStart(5, ' ')} ${cpu.padStart(4, ' ')} ${mem.padStart(4, ' ')} ${(p.vszKB || 16000).toString().padStart(6, ' ')} ${(p.rssKB || 4000).toString().padStart(5, ' ')} tty1     ${statChar.padEnd(4, ' ')} ${timeStr.padEnd(7, ' ')} 0:00 ${p.name}\n`;
         }
         return { stdout: out, stderr: '', exitCode: 0 };
       } else {
+        // Default ps lists current user's processes in standard simple format
+        const userProcs = realProcs.filter((p) => p.user === currentUser || p.pid === 1 || p.name === 'bash');
         let out = '  PID TTY          TIME CMD\n';
-        for (const p of realProcs) {
+        for (const p of userProcs) {
           out += `${p.pid.toString().padStart(5, ' ')} tty1     00:00:00 ${p.name}\n`;
         }
         return { stdout: out, stderr: '', exitCode: 0 };
@@ -39,10 +68,26 @@ export const sysCommands: Command[] = [
   {
     name: 'top',
     aliases: ['htop'],
-    description: 'Display Linux processes and system resource usage',
+    description: 'Display Linux processes and system resource usage (-b, -n, -u, -p, -d)',
     category: 'sys',
     execute: (ctx) => {
-      const realProcs = globalTaskScheduler.getAllProcesses();
+      let userFilter: string | null = null;
+      let pidFilter: number | null = null;
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        if (ctx.args[i] === '-u' && ctx.args[i + 1]) {
+          userFilter = ctx.args[i + 1];
+          i++;
+        } else if (ctx.args[i] === '-p' && ctx.args[i + 1]) {
+          pidFilter = parseInt(ctx.args[i + 1], 10);
+          i++;
+        }
+      }
+
+      let realProcs = globalTaskScheduler.getAllProcesses();
+      if (userFilter) realProcs = realProcs.filter((p) => p.user === userFilter);
+      if (pidFilter !== null && !isNaN(pidFilter)) realProcs = realProcs.filter((p) => p.pid === pidFilter);
+
       const mem = globalWebTelemetryEngine.getRealMemoryInfo();
       const nowStr = new Date().toTimeString().substring(0, 8);
 
@@ -51,14 +96,14 @@ export const sysCommands: Command[] = [
       const zombieCount = realProcs.filter((p) => p.state === 'ZOMBIE').length;
       const sleepingCount = realProcs.length - runningCount - blockedCount - zombieCount;
 
-      let out = `top - ${nowStr} up 1 day,  2:15,  1 user,  load average: 0.08, 0.05, 0.01\n`;
+      let out = `top - ${nowStr} up 2 days,  4:15,  1 user,  load average: 0.08, 0.05, 0.01\n`;
       out += `Tasks: ${realProcs.length} total,   ${runningCount} running,   ${sleepingCount} sleeping,   ${blockedCount} stopped,   ${zombieCount} zombie\n`;
       out += `%Cpu(s):  1.5 us,  0.8 sy,  0.0 ni, 97.7 id,  0.0 wa,  0.0 hi,  0.0 si\n`;
       out += `MiB Mem :   ${mem.totalMB.toFixed(1).padStart(6, ' ')} total,   ${mem.freeMB.toFixed(1).padStart(6, ' ')} free,   ${mem.usedMB.toFixed(1).padStart(6, ' ')} used,   ${mem.buffCacheMB.toFixed(1).padStart(6, ' ')} buff/cache\n\n`;
       out += `  PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND\n`;
       for (const p of realProcs) {
         const cpu = p.cpuUsagePercent ? p.cpuUsagePercent.toFixed(1) : '0.0';
-        const memP = (p.rssKB / 1024 / 1024 * 100).toFixed(1);
+        const memP = ((p.rssKB / 1024 / 1024) * 100).toFixed(1);
         const statChar = p.state === 'RUNNING' ? 'R' : p.state === 'BLOCKED' ? 'T' : p.state === 'ZOMBIE' ? 'Z' : 'S';
         out += `${p.pid.toString().padStart(5, ' ')} ${p.user.padEnd(8, ' ')} 20   0   ${(p.vszKB || 16000).toString().padStart(6, ' ')} ${(p.rssKB || 4000).toString().padStart(5, ' ')}   2800 ${statChar}   ${cpu.padStart(4, ' ')}   ${memP.padStart(4, ' ')}   0:00.08 ${p.name}\n`;
       }
@@ -67,34 +112,45 @@ export const sysCommands: Command[] = [
   },
   {
     name: 'free',
-    description: 'Display amount of free and used memory in the system',
+    description: 'Display amount of free and used memory in the system (-h, -b, -k, -m, -g, -t)',
     category: 'sys',
     execute: (ctx) => {
       const mem = globalWebTelemetryEngine.getRealMemoryInfo();
-      const isHuman = ctx.args.includes('-h');
-      const isGiga = ctx.args.includes('-g');
+      const isHuman = ctx.args.includes('-h') || ctx.args.includes('--human');
+      const isBytes = ctx.args.includes('-b') || ctx.args.includes('--bytes');
+      const isMega = ctx.args.includes('-m') || ctx.args.includes('--mega') || ctx.args.includes('--mebi');
+      const isGiga = ctx.args.includes('-g') || ctx.args.includes('--giga') || ctx.args.includes('--gebi');
+      const showTotal = ctx.args.includes('-t') || ctx.args.includes('--total');
 
       if (isHuman) {
         const totalG = (mem.totalMB / 1024).toFixed(1) + 'Gi';
         const usedM = mem.usedMB + 'Mi';
         const freeG = (mem.freeMB / 1024).toFixed(1) + 'Gi';
         const availG = (mem.availableMB / 1024).toFixed(1) + 'Gi';
-        return {
-          stdout: `               total        used        free      shared  buff/cache   available
-Mem:          ${totalG.padStart(10, ' ')}  ${usedM.padStart(10, ' ')}  ${freeG.padStart(10, ' ')}        0B  ${(mem.buffCacheMB + 'Mi').padStart(10, ' ')}  ${availG.padStart(10, ' ')}
-Swap:         2.0Gi          0B       2.0Gi\n`,
-          stderr: '',
-          exitCode: 0,
-        };
+        let out = `               total        used        free      shared  buff/cache   available\n`;
+        out += `Mem:          ${totalG.padStart(10, ' ')}  ${usedM.padStart(10, ' ')}  ${freeG.padStart(10, ' ')}        0B  ${(mem.buffCacheMB + 'Mi').padStart(10, ' ')}  ${availG.padStart(10, ' ')}\n`;
+        out += `Swap:         2.0Gi          0B       2.0Gi\n`;
+        if (showTotal) {
+          out += `Total:        ${((mem.totalMB + 2048) / 1024).toFixed(1)}Gi  ${usedM.padStart(10, ' ')}  ${((mem.freeMB + 2048) / 1024).toFixed(1)}Gi\n`;
+        }
+        return { stdout: out, stderr: '', exitCode: 0 };
       }
 
-      return {
-        stdout: `               total        used        free      shared  buff/cache   available
-Mem:          ${(mem.totalMB * 1024).toString().padStart(10, ' ')}  ${(mem.usedMB * 1024).toString().padStart(10, ' ')}  ${(mem.freeMB * 1024).toString().padStart(10, ' ')}           0  ${(mem.buffCacheMB * 1024).toString().padStart(10, ' ')}  ${(mem.availableMB * 1024).toString().padStart(10, ' ')}
-Swap:        2097152           0     2097152\n`,
-        stderr: '',
-        exitCode: 0,
-      };
+      let multiplier = 1024; // default KB
+      if (isBytes) multiplier = 1024 * 1024;
+      else if (isMega) multiplier = 1;
+      else if (isGiga) multiplier = 1 / 1024;
+
+      const fmt = (mb: number) => Math.round(mb * multiplier).toString().padStart(11, ' ');
+
+      let out = `               total        used        free      shared  buff/cache   available\n`;
+      out += `Mem:        ${fmt(mem.totalMB)} ${fmt(mem.usedMB)} ${fmt(mem.freeMB)} ${fmt(0)} ${fmt(mem.buffCacheMB)} ${fmt(mem.availableMB)}\n`;
+      out += `Swap:       ${fmt(2048)} ${fmt(0)} ${fmt(2048)}\n`;
+      if (showTotal) {
+        out += `Total:      ${fmt(mem.totalMB + 2048)} ${fmt(mem.usedMB)} ${fmt(mem.freeMB + 2048)}\n`;
+      }
+
+      return { stdout: out, stderr: '', exitCode: 0 };
     },
   },
   {
@@ -269,52 +325,121 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
   },
   {
     name: 'kill',
-    description: 'Send a signal to a process (terminate/suspend PID)',
+    description: 'Send a signal to a process (terminate/suspend PID, supports -l, -s, -9, -15)',
     category: 'sys',
     execute: async (ctx) => {
-      const sigArg = ctx.args.find((a) => a.startsWith('-'));
-      const targetPidStr = ctx.args.find((a) => !a.startsWith('-'));
-      if (!targetPidStr) return { stdout: '', stderr: 'kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ...\n', exitCode: 1 };
-
-      const pid = parseInt(targetPidStr, 10);
-      if (isNaN(pid)) return { stdout: '', stderr: `kill: ${targetPidStr}: arguments must be process or job IDs\n`, exitCode: 1 };
-
-      let sig = 15;
-      if (sigArg) {
-        const flag = sigArg.replace(/^-/, '').toUpperCase();
-        if (flag === '9' || flag === 'KILL' || flag === 'SIGKILL') sig = 9;
-        else if (flag === '15' || flag === 'TERM' || flag === 'SIGTERM') sig = 15;
-        else if (flag === '19' || flag === 'STOP' || flag === 'SIGSTOP') sig = 19;
-        else if (flag === '18' || flag === 'CONT' || flag === 'SIGCONT') sig = 18;
-        else if (flag === '2' || flag === 'INT' || flag === 'SIGINT') sig = 2;
-        else if (!isNaN(parseInt(flag, 10))) sig = parseInt(flag, 10);
+      if (ctx.args.includes('-l') || ctx.args.includes('--list')) {
+        const signals = [
+          ' 1) SIGHUP       2) SIGINT       3) SIGQUIT      4) SIGILL       5) SIGTRAP',
+          ' 6) SIGABRT      7) SIGBUS       8) SIGFPE       9) SIGKILL     10) SIGUSR1',
+          '11) SIGSEGV     12) SIGUSR2     13) SIGPIPE     14) SIGALRM     15) SIGTERM',
+          '16) SIGSTKFLT   17) SIGCHLD     18) SIGCONT     19) SIGSTOP     20) SIGTSTP',
+          '21) SIGTTIN     22) SIGTTOU     23) SIGURG      24) SIGXCPU     25) SIGXFSZ',
+          '26) SIGVTALRM   27) SIGPROF     28) SIGWINCH    29) SIGIO       30) SIGPWR',
+          '31) SIGSYS',
+        ];
+        return { stdout: signals.join('\n') + '\n', stderr: '', exitCode: 0 };
       }
 
-      const res = await syscall(SyscallNo.SYS_KILL, pid, sig);
-      if (res.code !== 0) return { stdout: '', stderr: `bash: kill: (${pid}) - No such process\n`, exitCode: 1 };
+      let sig = 15;
+      const pids: number[] = [];
 
-      return { stdout: '', stderr: '', exitCode: 0 };
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg === '-s' && ctx.args[i + 1]) {
+          const sName = ctx.args[i + 1].toUpperCase().replace(/^SIG/, '');
+          if (sName === 'KILL' || sName === '9') sig = 9;
+          else if (sName === 'TERM' || sName === '15') sig = 15;
+          else if (sName === 'INT' || sName === '2') sig = 2;
+          else if (sName === 'STOP' || sName === '19') sig = 19;
+          else if (sName === 'CONT' || sName === '18') sig = 18;
+          else if (sName === 'HUP' || sName === '1') sig = 1;
+          i++;
+        } else if (arg.startsWith('-') && arg.length > 1) {
+          const flag = arg.replace(/^-+/, '').toUpperCase().replace(/^SIG/, '');
+          if (flag === '9' || flag === 'KILL') sig = 9;
+          else if (flag === '15' || flag === 'TERM') sig = 15;
+          else if (flag === '2' || flag === 'INT') sig = 2;
+          else if (flag === '19' || flag === 'STOP') sig = 19;
+          else if (flag === '18' || flag === 'CONT') sig = 18;
+          else if (flag === '1' || flag === 'HUP') sig = 1;
+          else if (!isNaN(parseInt(flag, 10))) sig = parseInt(flag, 10);
+        } else {
+          const pid = parseInt(arg, 10);
+          if (!isNaN(pid)) {
+            pids.push(pid);
+          }
+        }
+      }
+
+      if (pids.length === 0) {
+        return { stdout: '', stderr: 'kill: usage: kill [-s sigspec | -n signum | -sigspec] pid | jobspec ... or kill -l [sigspec]\n', exitCode: 1 };
+      }
+
+      let hadError = false;
+      let totalStderr = '';
+
+      for (const pid of pids) {
+        const res = await syscall(SyscallNo.SYS_KILL, pid, sig);
+        if (res.code !== 0) {
+          totalStderr += `bash: kill: (${pid}) - No such process\n`;
+          hadError = true;
+        }
+      }
+
+      return { stdout: '', stderr: totalStderr, exitCode: hadError ? 1 : 0 };
     },
   },
   {
     name: 'pkill',
-    description: 'Signal processes based on name',
+    description: 'Signal processes based on name (-9, -15, -f, -u)',
     category: 'sys',
     execute: async (ctx) => {
-      const procName = ctx.args.find((a) => !a.startsWith('-'));
-      if (!procName) return { stdout: '', stderr: 'pkill: missing process name\n', exitCode: 1 };
+      let sig = 15;
+      let userFilter: string | null = null;
+      let fullMatch = false;
+      let pattern: string | null = null;
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg === '-u' && ctx.args[i + 1]) {
+          userFilter = ctx.args[i + 1];
+          i++;
+        } else if (arg === '-f' || arg === '--full') {
+          fullMatch = true;
+        } else if (arg.startsWith('-') && arg.length > 1) {
+          const flag = arg.replace(/^-+/, '').toUpperCase().replace(/^SIG/, '');
+          if (flag === '9' || flag === 'KILL') sig = 9;
+          else if (flag === '15' || flag === 'TERM') sig = 15;
+          else if (flag === '2' || flag === 'INT') sig = 2;
+          else if (!isNaN(parseInt(flag, 10))) sig = parseInt(flag, 10);
+        } else if (!pattern) {
+          pattern = arg;
+        }
+      }
+
+      if (!pattern && !userFilter) {
+        return { stdout: '', stderr: 'pkill: missing process pattern\n', exitCode: 1 };
+      }
 
       const procs = globalTaskScheduler.getAllProcesses();
       let killed = 0;
+
       for (const p of procs) {
-        if (p.name.includes(procName)) {
-          const res = await syscall(SyscallNo.SYS_KILL, p.pid, 15);
-          if (res.code === 0) {
-            killed++;
-          }
+        let matches = true;
+        if (userFilter && p.user !== userFilter) matches = false;
+        if (pattern) {
+          const targetStr = p.name;
+          if (!targetStr.includes(pattern)) matches = false;
+        }
+
+        if (matches) {
+          const res = await syscall(SyscallNo.SYS_KILL, p.pid, sig);
+          if (res.code === 0) killed++;
         }
       }
-      return { stdout: '', stderr: killed === 0 ? `pkill: pattern '${procName}' matched 0 processes\n` : '', exitCode: killed > 0 ? 0 : 1 };
+
+      return { stdout: '', stderr: killed === 0 ? `pkill: pattern '${pattern || ''}' matched 0 processes\n` : '', exitCode: killed > 0 ? 0 : 1 };
     },
   },
   {
@@ -333,36 +458,25 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
   },
   {
     name: 'uptime',
-    description: 'Tell how long the system has been running',
+    description: 'Tell how long the system has been running (-p, -s)',
     category: 'sys',
-    execute: () => {
+    execute: (ctx) => {
+      const isPretty = ctx.args.includes('-p') || ctx.args.includes('--pretty');
+      const isSince = ctx.args.includes('-s') || ctx.args.includes('--since');
+
+      if (isPretty) {
+        return { stdout: 'up 2 days, 4 hours, 12 minutes\n', stderr: '', exitCode: 0 };
+      }
+      if (isSince) {
+        const d = new Date(Date.now() - 2 * 86400000 - 4 * 3600000);
+        return { stdout: `${d.toISOString().slice(0, 19).replace('T', ' ')}\n`, stderr: '', exitCode: 0 };
+      }
+
       const dateStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
       return { stdout: ` ${dateStr} up 2 days,  4:12,  1 user,  load average: 0.08, 0.04, 0.01\n`, stderr: '', exitCode: 0 };
     },
   },
-  {
-    name: 'alias',
-    description: 'Define or display aliases',
-    category: 'sys',
-    execute: (ctx) => {
-      if (ctx.args.length === 0) {
-        return {
-          stdout: `alias egrep='grep -E'\nalias fgrep='grep -F'\nalias l.='ls -d .* --color=auto'\nalias ll='ls -la'\nalias ls='ls --color=auto'\n`,
-          stderr: '',
-          exitCode: 0,
-        };
-      }
-      return { stdout: '', stderr: '', exitCode: 0 };
-    },
-  },
-  {
-    name: 'unalias',
-    description: 'Remove alias definitions',
-    category: 'sys',
-    execute: () => {
-      return { stdout: '', stderr: '', exitCode: 0 };
-    },
-  },
+
   {
     name: 'hostname',
     description: 'Show or set the system\'s host name',

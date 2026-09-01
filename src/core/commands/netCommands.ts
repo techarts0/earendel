@@ -105,12 +105,13 @@ export const netCommands: Command[] = [
   },
   {
     name: 'ip',
-    description: 'show / manipulate routing, network devices, interfaces and tunnels',
+    description: 'Show / manipulate routing, network devices, interfaces and tunnels (ip a, ip link, ip route)',
     category: 'net',
     execute: async (ctx) => {
       const sub = ctx.args[0] || 'a';
+      const ipInfo = await getRealClientNetworkInfo();
+
       if (sub === 'a' || sub === 'addr' || sub === 'address') {
-        const ipInfo = await getRealClientNetworkInfo();
         const output = [
           '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN group default qlen 1000',
           '    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00',
@@ -127,25 +128,79 @@ export const netCommands: Command[] = [
         ].join('\n');
         return { stdout: output + '\n', stderr: '', exitCode: 0 };
       }
-      return { stdout: 'Usage: ip [ OPTIONS ] OBJECT { COMMAND | help }\n', stderr: '', exitCode: 0 };
+
+      if (sub === 'l' || sub === 'link') {
+        const output = [
+          '1: lo: <LOOPBACK,UP,LOWER_UP> mtu 65536 qdisc noqueue state UNKNOWN mode DEFAULT group default qlen 1000',
+          '    link/loopback 00:00:00:00:00:00 brd 00:00:00:00:00:00',
+          '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP mode DEFAULT group default qlen 1000',
+          '    link/ether 52:54:00:12:34:56 brd ff:ff:ff:ff:ff:ff',
+        ].join('\n');
+        return { stdout: output + '\n', stderr: '', exitCode: 0 };
+      }
+
+      if (sub === 'r' || sub === 'route') {
+        const output = [
+          'default via 192.168.1.1 dev eth0 proto dhcp metric 100',
+          '192.168.1.0/24 dev eth0 proto kernel scope link src 192.168.1.100 metric 100',
+        ].join('\n');
+        return { stdout: output + '\n', stderr: '', exitCode: 0 };
+      }
+
+      return { stdout: 'Usage: ip [ OPTIONS ] OBJECT { COMMAND | help }\nwhere  OBJECT := { address | link | route | neigh | tunnel }\n', stderr: '', exitCode: 0 };
     },
   },
   {
     name: 'netstat',
-    description: 'Print network connections, routing tables, interface statistics, masquerade connections, and multicast memberships',
+    description: 'Print network connections, routing tables, interface statistics (-t, -u, -l, -a, -n, -p, -r)',
     category: 'net',
-    execute: () => {
+    execute: (ctx) => {
+      const flags = new Set<string>();
+      for (const arg of ctx.args) {
+        if (arg.startsWith('--')) flags.add(arg.slice(2));
+        else if (arg.startsWith('-') && arg.length > 1) {
+          for (let j = 1; j < arg.length; j++) flags.add(arg[j]);
+        }
+      }
+
+      if (flags.has('r') || flags.has('route')) {
+        let out = 'Kernel IP routing table\n';
+        out += 'Destination     Gateway         Genmask         Flags   MSS Window  irtt Iface\n';
+        out += '0.0.0.0         192.168.1.1     0.0.0.0         UG        0 0          0 eth0\n';
+        out += '192.168.1.0     0.0.0.0         255.255.255.0   U         0 0          0 eth0\n';
+        return { stdout: out, stderr: '', exitCode: 0 };
+      }
+
+      const showUdp = flags.has('u') || flags.has('udp');
+      const showTcp = flags.has('t') || flags.has('tcp') || !showUdp;
+      const showListening = flags.has('l') || flags.has('listening');
+      const showAll = flags.has('a') || flags.has('all');
+      const showProcess = flags.has('p') || flags.has('program');
+
       const ports = globalServiceManager.getListeningPorts();
       
       const lines = [
-        'Active Internet connections (only servers)',
-        'Proto Recv-Q Send-Q Local Address           Foreign Address         State      ',
+        'Active Internet connections (servers and established)',
+        `Proto Recv-Q Send-Q Local Address           Foreign Address         State       ${showProcess ? 'PID/Program name' : ''}`.trimEnd(),
       ];
 
-      ports.forEach((p: { port: number; name: string }) => {
-        const addr = p.port === 80 || p.port === 3306 ? `127.0.0.1:${p.port}` : `0.0.0.0:${p.port}`;
-        lines.push(`tcp        0      0 ${addr.padEnd(23)} 0.0.0.0:*               LISTEN     `);
-      });
+      if (showTcp) {
+        ports.forEach((p: { port: number; name: string }) => {
+          const addr = p.port === 80 || p.port === 3306 ? `127.0.0.1:${p.port}` : `0.0.0.0:${p.port}`;
+          const procStr = showProcess ? `4/${p.name}` : '';
+          lines.push(`tcp        0      0 ${addr.padEnd(23)} 0.0.0.0:*               LISTEN      ${procStr}`.trimEnd());
+        });
+
+        if (showAll || !showListening) {
+          const procStr = showProcess ? '12/curl' : '';
+          lines.push(`tcp        0      0 192.168.1.100:54218     93.184.216.34:443       ESTABLISHED ${procStr}`.trimEnd());
+        }
+      }
+
+      if (showUdp || showAll) {
+        lines.push(`udp        0      0 0.0.0.0:68              0.0.0.0:*                           ${showProcess ? '2/dhclient' : ''}`.trimEnd());
+        lines.push(`udp        0      0 127.0.0.1:53            0.0.0.0:*                           ${showProcess ? '3/systemd-resolve' : ''}`.trimEnd());
+      }
 
       return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
     },
@@ -172,17 +227,46 @@ export const netCommands: Command[] = [
   },
   {
     name: 'ss',
-    description: 'another utility to investigate sockets',
+    description: 'Investigate sockets (-t, -u, -l, -a, -n, -p)',
     category: 'net',
-    execute: () => {
+    execute: (ctx) => {
+      const flags = new Set<string>();
+      for (const arg of ctx.args) {
+        if (arg.startsWith('--')) flags.add(arg.slice(2));
+        else if (arg.startsWith('-') && arg.length > 1) {
+          for (let j = 1; j < arg.length; j++) flags.add(arg[j]);
+        }
+      }
+
+      const showUdp = flags.has('u') || flags.has('udp');
+      const showTcp = flags.has('t') || flags.has('tcp') || !showUdp;
+      const showListening = flags.has('l') || flags.has('listening');
+      const showAll = flags.has('a') || flags.has('all');
+      const showProcess = flags.has('p') || flags.has('processes');
+
       const ports = globalServiceManager.getListeningPorts();
       const lines = [
-        'Netid State   Recv-Q Send-Q Local Address:Port   Peer Address:Port Process',
+        `Netid State   Recv-Q Send-Q Local Address:Port   Peer Address:Port ${showProcess ? 'Process' : ''}`.trimEnd(),
       ];
-      ports.forEach((p: { port: number; name: string }) => {
-        const addr = p.port === 80 || p.port === 3306 ? `127.0.0.1:${p.port}` : `0.0.0.0:${p.port}`;
-        lines.push(`tcp   LISTEN  0      128    ${addr.padEnd(21)} 0.0.0.0:*       users:(("${p.name}",pid=4,fd=3))`);
-      });
+
+      if (showTcp) {
+        ports.forEach((p: { port: number; name: string }) => {
+          const addr = p.port === 80 || p.port === 3306 ? `127.0.0.1:${p.port}` : `0.0.0.0:${p.port}`;
+          const procStr = showProcess ? `users:(("${p.name}",pid=4,fd=3))` : '';
+          lines.push(`tcp   LISTEN  0      128    ${addr.padEnd(21)} 0.0.0.0:*       ${procStr}`.trimEnd());
+        });
+
+        if (showAll || !showListening) {
+          const procStr = showProcess ? `users:(("curl",pid=12,fd=4))` : '';
+          lines.push(`tcp   ESTAB   0      0      192.168.1.100:54218   93.184.216.34:443   ${procStr}`.trimEnd());
+        }
+      }
+
+      if (showUdp || showAll) {
+        const procStr = showProcess ? `users:(("dhclient",pid=2,fd=5))` : '';
+        lines.push(`udp   UNCONN  0      0      0.0.0.0:68            0.0.0.0:*           ${procStr}`.trimEnd());
+      }
+
       return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
     },
   },

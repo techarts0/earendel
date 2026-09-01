@@ -1,55 +1,95 @@
 // Behavioral Shell Scripting & Control Flow Commands for Earendel
 import { Command } from '../types';
 
+// POSIX test / [ Expression Evaluator
+function evaluateTestExpr(tokens: string[], ctx: any): boolean {
+  if (tokens.length === 0) return false;
+  if (tokens.length === 1) return tokens[0] !== '';
+
+  // Handle -o (logical OR, lower precedence than -a)
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i] === '-o') {
+      const left = evaluateTestExpr(tokens.slice(0, i), ctx);
+      const right = evaluateTestExpr(tokens.slice(i + 1), ctx);
+      return left || right;
+    }
+  }
+
+  // Handle -a (logical AND)
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i] === '-a') {
+      const left = evaluateTestExpr(tokens.slice(0, i), ctx);
+      const right = evaluateTestExpr(tokens.slice(i + 1), ctx);
+      return left && right;
+    }
+  }
+
+  // Handle ! (NOT)
+  if (tokens[0] === '!') {
+    return !evaluateTestExpr(tokens.slice(1), ctx);
+  }
+
+  // Handle parenthesized expressions ( expr )
+  if (tokens[0] === '(' && tokens[tokens.length - 1] === ')') {
+    return evaluateTestExpr(tokens.slice(1, tokens.length - 1), ctx);
+  }
+
+  // Unary operators (2 arguments)
+  if (tokens.length === 2) {
+    const op = tokens[0];
+    const target = tokens[1];
+    const user = ctx.env?.['USER'] || 'hello';
+
+    if (op === '-z') return target === '';
+    if (op === '-n') return target !== '';
+
+    const node = ctx.vfs.getNodeByPath(target, user);
+    if (op === '-e') return node !== null;
+    if (op === '-f') return node !== null && node.type === 'file';
+    if (op === '-d') return node !== null && node.type === 'directory';
+    if (op === '-L' || op === '-h') return node !== null && node.type === 'symlink';
+    if (op === '-s') return node !== null && node.size > 0;
+    if (op === '-r') return node !== null && ctx.vfs.checkPermission(node, 'r', user);
+    if (op === '-w') return node !== null && ctx.vfs.checkPermission(node, 'w', user);
+    if (op === '-x') return node !== null && (node.permissions?.includes('x') || ctx.vfs.checkPermission(node, 'x', user));
+  }
+
+  // Binary operators (3 arguments)
+  if (tokens.length === 3) {
+    const left = tokens[0];
+    const op = tokens[1];
+    const right = tokens[2];
+
+    if (op === '=' || op === '==') return left === right;
+    if (op === '!=') return left !== right;
+
+    const numLeft = parseInt(left, 10);
+    const numRight = parseInt(right, 10);
+    if (!isNaN(numLeft) && !isNaN(numRight)) {
+      if (op === '-eq') return numLeft === numRight;
+      if (op === '-ne') return numLeft !== numRight;
+      if (op === '-gt') return numLeft > numRight;
+      if (op === '-ge') return numLeft >= numRight;
+      if (op === '-lt') return numLeft < numRight;
+      if (op === '-le') return numLeft <= numRight;
+    }
+  }
+
+  return false;
+}
+
 export const shellControlCommands: Command[] = [
   {
     name: 'test',
     aliases: ['['],
-    description: 'Check file types and compare values',
+    description: 'Check file types and compare values according to POSIX test specification',
     category: 'sys',
     execute: (ctx) => {
-      const args = ctx.args.filter((a) => a !== ']');
-      if (args.length === 0) return { stdout: '', stderr: '', exitCode: 1 };
-
-      let isTrue = false;
-
-      // File tests
-      if (args[0] === '-f' && args[1]) {
-        const node = ctx.vfs.getNodeByPath(args[1]);
-        isTrue = node !== null && node.type === 'file';
-      } else if (args[0] === '-d' && args[1]) {
-        const node = ctx.vfs.getNodeByPath(args[1]);
-        isTrue = node !== null && node.type === 'directory';
-      } else if (args[0] === '-e' && args[1]) {
-        const node = ctx.vfs.getNodeByPath(args[1]);
-        isTrue = node !== null;
-      } else if (args[0] === '-z' && args[1]) {
-        isTrue = (args[1] ?? '') === '';
-      } else if (args[0] === '-n' && args[1]) {
-        isTrue = (args[1] ?? '') !== '';
-      } else if (args.length >= 3) {
-        const left = args[0];
-        const op = args[1];
-        const right = args[2];
-
-        const numLeft = parseFloat(left);
-        const numRight = parseFloat(right);
-
-        if (!isNaN(numLeft) && !isNaN(numRight)) {
-          if (op === '-eq') isTrue = numLeft === numRight;
-          else if (op === '-ne') isTrue = numLeft !== numRight;
-          else if (op === '-gt') isTrue = numLeft > numRight;
-          else if (op === '-ge') isTrue = numLeft >= numRight;
-          else if (op === '-lt') isTrue = numLeft < numRight;
-          else if (op === '-le') isTrue = numLeft <= numRight;
-          else if (op === '=') isTrue = left === right;
-          else if (op === '!=') isTrue = left !== right;
-        } else {
-          if (op === '=') isTrue = left === right;
-          else if (op === '!=') isTrue = left !== right;
-        }
+      let args = [...ctx.args];
+      if (args.length > 0 && args[args.length - 1] === ']') {
+        args = args.slice(0, args.length - 1);
       }
-
+      const isTrue = evaluateTestExpr(args, ctx);
       return { stdout: '', stderr: '', exitCode: isTrue ? 0 : 1 };
     },
   },
