@@ -615,6 +615,15 @@ export class ShellEngine {
       res.stdout = '';
     }
 
+    // Intercept with MAN Agent / AI Auto-Tutor if enabled and execution failed
+    const { globalTutorEngine } = await import('./tutorEngine');
+    if (globalTutorEngine.isEnabled() && (res.exitCode !== 0 || res.stderr.trim().length > 0)) {
+      const diag = globalTutorEngine.diagnoseCommand(cmdName, cmdArgs, res.exitCode, res.stderr);
+      if (diag) {
+        res.stderr = (res.stderr || '') + diag;
+      }
+    }
+
     return res;
   }
 

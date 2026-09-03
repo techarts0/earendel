@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { globalVFS } from '../core/vfs';
-import { X, Save, Terminal, Info } from 'lucide-react';
+import { globalTutorEngine } from '../core/tutorEngine';
+import { X, Save, Terminal, Info, Sparkles } from 'lucide-react';
 
 interface ViEditorModalProps {
   filePath: string;
@@ -83,6 +84,18 @@ export const ViEditorModal: React.FC<ViEditorModalProps> = ({ filePath, initialC
     } else if (cmd === ':set nonu') {
       setShowLineNumbers(false);
       setStatusMsg('Line numbers disabled');
+      setShowCmdBar(false);
+    } else if (cmd === ':gen' || cmd === ':ai' || cmd.startsWith(':ai ')) {
+      const extraPrompt = cmd.startsWith(':ai ') ? cmd.slice(4).trim() : '';
+      const promptPayload = extraPrompt ? (content ? `${content}\n# ${extraPrompt}` : `# ${extraPrompt}`) : content;
+      const res = globalTutorEngine.generateCodeFromComments(filePath, promptPayload);
+      const llm = globalTutorEngine.checkLLMConfig(globalVFS);
+      setContent((prev) => (prev.trim() ? prev + '\n\n' + res.code : res.code));
+      if (!llm.configured) {
+        setStatusMsg(`[AI Copilot] Generated ${res.lineCount} lines via offline template (/etc/llm.conf unconfigured)`);
+      } else {
+        setStatusMsg(`[AI Copilot] Generated ${res.lineCount} lines via ${llm.model} (type :w to save)`);
+      }
       setShowCmdBar(false);
     } else {
       setStatusMsg(`E492: Not an editor command: ${cmd.replace(':', '')}`);
@@ -296,7 +309,8 @@ export const ViEditorModal: React.FC<ViEditorModalProps> = ({ filePath, initialC
                 <span>
                   Commands: <span style={{ background: '#1e293b', color: '#cbd5e1', padding: '1px 5px', borderRadius: '3px' }}>i</span> insert |{' '}
                   <span style={{ background: '#1e293b', color: '#cbd5e1', padding: '1px 5px', borderRadius: '3px' }}>Esc</span> command mode |{' '}
-                  <span style={{ background: '#1e293b', color: '#cbd5e1', padding: '1px 5px', borderRadius: '3px' }}>:wq</span> save & exit
+                  <span style={{ background: '#1e293b', color: '#cbd5e1', padding: '1px 5px', borderRadius: '3px' }}>:wq</span> save & exit |{' '}
+                  <span style={{ background: 'rgba(217, 70, 239, 0.2)', color: '#f472b6', padding: '1px 5px', borderRadius: '3px', fontWeight: 'bold' }}>:gen</span> AI code gen
                 </span>
               </div>
             </div>
