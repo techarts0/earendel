@@ -2,6 +2,7 @@
 // Provides real-time pedagogical diagnosis, spelling error correction, and VIM code generation.
 
 import { manDatabase } from './manDatabase';
+import { globalVFS } from './vfs';
 
 export interface DiagnosisResult {
   reason: string;
@@ -43,15 +44,8 @@ export class TutorEngine {
     hasKey: boolean;
     notice?: string;
   } {
-    let rawConf = '';
-    if (vfs && typeof vfs.readFile === 'function') {
-      rawConf = vfs.readFile('/etc/llm.conf') || '';
-    } else {
-      try {
-        const { globalVFS } = require('./vfs');
-        rawConf = globalVFS.readFile('/etc/llm.conf') || '';
-      } catch (e) {}
-    }
+    const targetVFS = vfs && typeof vfs.readFile === 'function' ? vfs : globalVFS;
+    const rawConf = targetVFS?.readFile('/etc/llm.conf') || '';
 
     const config: Record<string, string> = {};
     rawConf.split('\n').forEach((line: string) => {
