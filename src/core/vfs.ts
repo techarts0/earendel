@@ -754,7 +754,31 @@ constraints:
     const node = this.getNodeByPath(absPath);
     if (!node || !node.parent || node === this.root) return false;
 
-    if (!this.checkPermission(node.parent, 'w', currentUser)) return false;
+    // Protected system root directories that cannot be deleted
+    const protectedSystemDirs = new Set([
+      '/bin', '/boot', '/dev', '/etc', '/home', '/lib', '/lib64',
+      '/media', '/mnt', '/opt', '/proc', '/root', '/run', '/sbin',
+      '/srv', '/sys', '/tmp', '/usr', '/var'
+    ]);
+    if (protectedSystemDirs.has(absPath)) {
+      return false;
+    }
+
+    // Permission check:
+    // 1) root can delete any non-protected file/directory
+    // 2) If parent is root '/', allow user to delete their own created files/directories
+    // 3) Otherwise check write permission on parent directory
+    const isParentRoot = node.parent === this.root;
+    const isOwnerOfNode = node.owner === currentUser;
+    if (currentUser !== 'root') {
+      if (isParentRoot) {
+        if (!isOwnerOfNode && !this.checkPermission(node.parent, 'w', currentUser)) {
+          return false;
+        }
+      } else if (!this.checkPermission(node.parent, 'w', currentUser)) {
+        return false;
+      }
+    }
 
     if (node.type === 'directory' && node.children && node.children.size > 0 && !recursive) {
       return false;

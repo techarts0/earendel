@@ -802,10 +802,11 @@ export const fileCommands: Command[] = [
         }
 
         const isDir = node.type === 'directory';
-        const ok = ctx.vfs.remove(target, recursive || removeDir);
+        const currentUser = ctx.env.USER || 'hello';
+        const ok = ctx.vfs.remove(target, recursive || removeDir, currentUser);
         if (!ok) {
           if (!force) {
-            stderr += `rm: cannot remove '${target}': No such file or directory or non-empty directory\n`;
+            stderr += `rm: cannot remove '${target}': No such file or directory, permission denied, or protected system directory\n`;
             exitCode = 1;
           }
         } else if (verbose) {
@@ -1155,7 +1156,11 @@ Change: ${dateStr} +0800
       if (node.type !== 'directory') return { stdout: '', stderr: `rmdir: failed to remove '${dirName}': Not a directory\n`, exitCode: 1 };
       if (node.children && node.children.size > 0) return { stdout: '', stderr: `rmdir: failed to remove '${dirName}': Directory not empty\n`, exitCode: 1 };
 
-      ctx.vfs.remove(dirName);
+      const currentUser = ctx.env.USER || 'hello';
+      const ok = ctx.vfs.remove(dirName, false, currentUser);
+      if (!ok) {
+        return { stdout: '', stderr: `rmdir: failed to remove '${dirName}': Permission denied or protected system directory\n`, exitCode: 1 };
+      }
       return { stdout: '', stderr: '', exitCode: 0 };
     },
   },
