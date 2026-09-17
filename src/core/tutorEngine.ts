@@ -19,8 +19,8 @@ export class TutorEngine {
     'grep', 'sed', 'awk', 'sort', 'uniq', 'tr', 'tee', 'cut', 'diff', 'paste', 'nl', 'tac', 'rev',
     'find', 'which', 'whereis', 'locate', 'ps', 'top', 'htop', 'free', 'df', 'kill', 'pkill',
     'uptime', 'ping', 'curl', 'wget', 'ifconfig', 'ip', 'netstat', 'ss', 'chmod', 'chown',
-    'tar', 'gzip', 'gunzip', 'zip', 'unzip', 'su', 'sudo', 'useradd', 'userdel', 'passwd',
-    'groups', 'groupadd', 'groupdel', 'who', 'id', 'login', 'logout', 'systemctl', 'service',
+    'tar', 'gzip', 'gunzip', 'zip', 'unzip', 'su', 'sudo', 'useradd', 'usermod', 'userdel', 'passwd',
+    'groups', 'groupadd', 'groupmod', 'groupdel', 'gpasswd', 'who', 'last', 'id', 'login', 'logout', 'systemctl', 'service',
     'apt', 'apt-get', 'dpkg', 'ufw', 'iptables', 'alias', 'unalias', 'jobs', 'fg', 'bg',
     'time', 'date', 'uname', 'clear', 'echo', 'vi', 'vim', 'man', 'docker', 'python3', 'node'
   ];

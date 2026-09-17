@@ -10,6 +10,8 @@ export interface ExecutionContext {
   args: string[];
   pipeInput?: string;
   processManager: ProcessManager;
+  shellEngine?: any;
+  history?: string[];
 }
 
 export interface ExecutionResult {
@@ -22,6 +24,7 @@ export interface ExecutionResult {
   openHarnessDag?: { path: string };
   loginPrompt?: { username: string };
   sudoPrompt?: { username: string; commandLine: string };
+  passwdPrompt?: { username: string; step: 'current' | 'new' | 'confirm'; newPass?: string };
   toggleFullscreen?: 'max' | 'restore';
   logout?: boolean;
   poweroff?: boolean;

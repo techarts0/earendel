@@ -324,6 +324,84 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
     },
   },
   {
+    name: 'history',
+    description: 'Display or manipulate the history list (supports -c, -d offset, -w [file], -r [file], [n])',
+    category: 'sys',
+    execute: (ctx) => {
+      const shell = ctx.shellEngine || (typeof window !== 'undefined' && (window as any).globalShellEngine)
+        ? (ctx.shellEngine || (window as any).globalShellEngine)
+        : null;
+
+      const historyList: string[] = ctx.history || (shell ? shell.getHistory() : []);
+
+      if (ctx.args.length === 0) {
+        // Output entire history with 1-based indexing
+        const formatted = historyList.map((cmd, idx) => `  ${String(idx + 1).padStart(5, ' ')}  ${cmd}`).join('\n');
+        return { stdout: formatted ? formatted + '\n' : '', stderr: '', exitCode: 0 };
+      }
+
+      // Check for flags
+      const firstArg = ctx.args[0];
+
+      // -c: Clear the history list
+      if (firstArg === '-c' || firstArg === '--clear') {
+        if (shell && shell.clearHistory) shell.clearHistory();
+        if (ctx.history) ctx.history.length = 0;
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+
+      // -d offset: Delete the history entry at position offset (1-based)
+      if (firstArg === '-d' && ctx.args[1]) {
+        const offset = parseInt(ctx.args[1], 10);
+        if (isNaN(offset) || offset <= 0 || offset > historyList.length) {
+          return { stdout: '', stderr: `-bash: history: ${ctx.args[1]}: history position out of range\n`, exitCode: 1 };
+        }
+        if (shell && shell.deleteHistoryIndex) shell.deleteHistoryIndex(offset - 1);
+        else historyList.splice(offset - 1, 1);
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+
+      // -w [file]: Write current history to history file (default ~/.bash_history)
+      if (firstArg === '-w') {
+        const targetPath = ctx.args[1] || (ctx.env['HOME'] ? `${ctx.env['HOME']}/.bash_history` : '/home/hello/.bash_history');
+        const content = historyList.join('\n') + '\n';
+        ctx.vfs.writeFile(targetPath, content);
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+
+      // -r [file]: Read history file and append to current history
+      if (firstArg === '-r') {
+        const targetPath = ctx.args[1] || (ctx.env['HOME'] ? `${ctx.env['HOME']}/.bash_history` : '/home/hello/.bash_history');
+        const content = ctx.vfs.readFile(targetPath);
+        if (content === null) {
+          return { stdout: '', stderr: `-bash: history: ${targetPath}: cannot read: No such file or directory\n`, exitCode: 1 };
+        }
+        const lines = content.split('\n').map((l) => l.trim()).filter(Boolean);
+        for (const l of lines) {
+          historyList.push(l);
+        }
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+
+      // history n: Display only the last n commands
+      const num = parseInt(firstArg, 10);
+      if (!isNaN(num) && num > 0) {
+        const startIndex = Math.max(0, historyList.length - num);
+        const sliced = historyList.slice(startIndex);
+        const formatted = sliced
+          .map((cmd, idx) => `  ${String(startIndex + idx + 1).padStart(5, ' ')}  ${cmd}`)
+          .join('\n');
+        return { stdout: formatted ? formatted + '\n' : '', stderr: '', exitCode: 0 };
+      }
+
+      return {
+        stdout: '',
+        stderr: 'Usage: history [-c] [-d offset] [n] or history -w [file] or history -r [file]\n',
+        exitCode: 2,
+      };
+    },
+  },
+  {
     name: 'kill',
     description: 'Send a signal to a process (terminate/suspend PID, supports -l, -s, -9, -15)',
     category: 'sys',

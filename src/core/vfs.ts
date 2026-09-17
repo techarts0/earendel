@@ -162,18 +162,24 @@ export class VirtualFileSystem {
 
     this.writeFile(
       '/etc/passwd',
-      'root:x:0:0:root:/root:/bin/bash\nhello:x:1000:1000:hello:/home/hello:/bin/bash\n'
+      'root:x:0:0:root:/root:/bin/bash\nhello:x:1000:1000:hello:/home/hello:/bin/bash\n',
+      'root'
     );
+    this.chmod('/etc/passwd', '644');
 
     this.writeFile(
       '/etc/shadow',
-      'root:$6$earendel$salt$earendel_hash:19000:0:99999:7:::\nhello:$6$earendel$salt$earendel_hash:19000:0:99999:7:::\n'
+      'root:$6$earendel$salt$earendel_hash:19000:0:99999:7:::\nhello:$6$earendel$salt$earendel_hash:19000:0:99999:7:::\n',
+      'root'
     );
+    this.chmod('/etc/shadow', '640');
 
     this.writeFile(
       '/etc/group',
-      'root:x:0:\nhello:x:1000:hello\nsudo:x:27:hello\n'
+      'root:x:0:\nhello:x:1000:hello\nsudo:x:27:hello\n',
+      'root'
     );
+    this.chmod('/etc/group', '644');
 
     this.mkdir('/lib/x86_64-linux-gnu', true);
     this.mkdir('/lib64', true);
@@ -593,7 +599,46 @@ constraints:
   public checkPermission(node: VFSNode, requiredBit: 'r' | 'w' | 'x', currentUser: string = 'hello'): boolean {
     if (currentUser === 'root') return true;
     const isOwner = node.owner === currentUser;
-    const isGroup = node.group === currentUser;
+
+    // Check if user belongs to node.group
+    let isGroup = node.group === currentUser;
+    if (!isGroup && node.group) {
+      try {
+        const groupFile = this.readFile('/etc/group', 'root') ?? '';
+        for (const line of groupFile.split('\n')) {
+          if (!line.trim()) continue;
+          const parts = line.split(':');
+          if (parts[0] === node.group) {
+            const members = (parts[3] || '').split(',').map((m) => m.trim());
+            if (members.includes(currentUser)) {
+              isGroup = true;
+            }
+            break;
+          }
+        }
+        // Also check if node.group is user's primary group in /etc/passwd
+        if (!isGroup) {
+          const passwdFile = this.readFile('/etc/passwd', 'root') ?? '';
+          for (const pLine of passwdFile.split('\n')) {
+            const pParts = pLine.split(':');
+            if (pParts[0] === currentUser) {
+              const primaryGid = parseInt(pParts[3], 10);
+              for (const gLine of groupFile.split('\n')) {
+                const gParts = gLine.split(':');
+                if (gParts[0] === node.group && parseInt(gParts[2], 10) === primaryGid) {
+                  isGroup = true;
+                  break;
+                }
+              }
+              break;
+            }
+          }
+        }
+      } catch (e) {
+        // Fallback to simple matching
+      }
+    }
+
     const offset = isOwner ? 0 : (isGroup ? 3 : 6);
     const bitOffset = requiredBit === 'r' ? 0 : requiredBit === 'w' ? 1 : 2;
     const bits = node.permissions.padEnd(9, '-');
@@ -828,39 +873,54 @@ constraints:
     if (!node) return false;
 
     const applyChmod = (targetNode: VFSNode, nodeAbsPath: string) => {
-      if (/^[0-7]{3}$/.test(mode)) {
+      let normalizedMode = mode;
+      // Handle 4-digit octal (e.g. 0755 -> 755)
+      if (/^0[0-7]{3}$/.test(normalizedMode)) {
+        normalizedMode = normalizedMode.slice(1);
+      }
+
+      if (/^[0-7]{3}$/.test(normalizedMode)) {
         const modeMap: { [key: string]: string } = {
           '7': 'rwx', '6': 'rw-', '5': 'r-x', '4': 'r--', '3': '-wx', '2': '-w-', '1': '--x', '0': '---'
         };
-        targetNode.permissions = `${modeMap[mode[0]]}${modeMap[mode[1]]}${modeMap[mode[2]]}`;
+        targetNode.permissions = `${modeMap[normalizedMode[0]]}${modeMap[normalizedMode[1]]}${modeMap[normalizedMode[2]]}`;
       } else {
-        const match = mode.match(/^([ugoa]*)([\+\-\=])([rwx]+)$/);
-        if (match) {
-          const who = match[1] || 'a';
-          const op = match[2];
-          const perm = match[3];
+        // Support comma-separated clauses like "u=rwx,g=rx,o=r" or "u+x,g-w"
+        const clauses = normalizedMode.split(',');
+        let u = targetNode.permissions.slice(0, 3).split('');
+        let g = targetNode.permissions.slice(3, 6).split('');
+        let o = targetNode.permissions.slice(6, 9).split('');
 
-          let u = targetNode.permissions.slice(0, 3).split('');
-          let g = targetNode.permissions.slice(3, 6).split('');
-          let o = targetNode.permissions.slice(6, 9).split('');
+        let anyMatched = false;
+        for (const clause of clauses) {
+          const match = clause.trim().match(/^([ugoa]*)([\+\-\=])([rwx]*)$/);
+          if (match) {
+            anyMatched = true;
+            const who = match[1] || 'a';
+            const op = match[2];
+            const perm = match[3] || '';
 
-          const updateChar = (groupArr: string[], char: string, action: string) => {
-            const idx = char === 'r' ? 0 : char === 'w' ? 1 : 2;
-            if (action === '+') groupArr[idx] = char;
-            else if (action === '-') groupArr[idx] = '-';
-            else if (action === '=') groupArr[idx] = perm.includes(char) ? char : '-';
-          };
+            const updateChar = (groupArr: string[], char: string, action: string) => {
+              const idx = char === 'r' ? 0 : char === 'w' ? 1 : 2;
+              if (action === '+') groupArr[idx] = char;
+              else if (action === '-') groupArr[idx] = '-';
+              else if (action === '=') groupArr[idx] = perm.includes(char) ? char : '-';
+            };
 
-          for (const char of ['r', 'w', 'x']) {
-            if (perm.includes(char) || op === '=') {
-              if (who.includes('u') || who.includes('a')) updateChar(u, char, op);
-              if (who.includes('g') || who.includes('a')) updateChar(g, char, op);
-              if (who.includes('o') || who.includes('a')) updateChar(o, char, op);
+            for (const char of ['r', 'w', 'x']) {
+              if (perm.includes(char) || op === '=') {
+                if (who.includes('u') || who.includes('a')) updateChar(u, char, op);
+                if (who.includes('g') || who.includes('a')) updateChar(g, char, op);
+                if (who.includes('o') || who.includes('a')) updateChar(o, char, op);
+              }
             }
           }
+        }
+
+        if (anyMatched) {
           targetNode.permissions = `${u.join('')}${g.join('')}${o.join('')}`;
         } else {
-          targetNode.permissions = mode;
+          targetNode.permissions = normalizedMode;
         }
       }
 

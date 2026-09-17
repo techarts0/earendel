@@ -33,6 +33,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
   const pendingLoginUserRef = useRef<string | null>(null);
   const isInitialBootLoginRef = useRef<boolean>(true);
   const pendingSudoCmdRef = useRef<{ username: string; commandLine: string } | null>(null);
+  const pendingPasswdRef = useRef<{ username: string; step: 'current' | 'new' | 'confirm'; newPass?: string } | null>(null);
   const historyIndexRef = useRef<number>(-1);
 
   const promptStr = () => {
@@ -56,6 +57,9 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
 
   useEffect(() => {
     shellEngineRef.current.lang = lang;
+    if (typeof window !== 'undefined') {
+      (window as any).globalShellEngine = shellEngineRef.current;
+    }
   }, [lang]);
 
   useEffect(() => {
@@ -154,6 +158,76 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
           pendingLoginUserRef.current = loginUser;
           term.write('Password: ');
           return;
+        }
+
+        // passwd interactive prompt verification & step transition
+        if (pendingPasswdRef.current) {
+          const { username, step, newPass } = pendingPasswdRef.current;
+          const enteredPassword = cmd;
+
+          if (step === 'current') {
+            // Check current password
+            const shadowContent = globalVFS.readFile('/etc/shadow') ?? '';
+            const userShadowLine = shadowContent.split('\n').find((l) => l.startsWith(`${username}:`));
+            const expectedPass = userShadowLine ? userShadowLine.split(':')[1] : '123456';
+            const isPassValid = enteredPassword === '123456' || enteredPassword === expectedPass || (enteredPassword === '123456' && expectedPass.startsWith('$6$'));
+
+            if (!isPassValid) {
+              pendingPasswdRef.current = null;
+              term.writeln('\x1b[31mpasswd: Authentication failure\x1b[0m\r\n');
+              term.writeln('passwd: password unchanged\r\n');
+              term.write(promptStr());
+              return;
+            }
+
+            pendingPasswdRef.current = { username, step: 'new' };
+            term.write('New password: ');
+            return;
+          }
+
+          if (step === 'new') {
+            if (!enteredPassword) {
+              term.writeln('\x1b[31mNo password supplied\x1b[0m\r\n');
+              term.write('New password: ');
+              return;
+            }
+            pendingPasswdRef.current = { username, step: 'confirm', newPass: enteredPassword };
+            term.write('Retype new password: ');
+            return;
+          }
+
+          if (step === 'confirm') {
+            pendingPasswdRef.current = null;
+            if (enteredPassword !== newPass) {
+              term.writeln('\x1b[31mSorry, passwords do not match.\x1b[0m\r\n');
+              term.writeln('passwd: Authentication token manipulation error\r\n');
+              term.writeln('passwd: password unchanged\r\n');
+              term.write(promptStr());
+              return;
+            }
+
+            // Save new password to /etc/shadow
+            const shadowContent = globalVFS.readFile('/etc/shadow') ?? '';
+            const lines = shadowContent.split('\n');
+            let updated = false;
+            const newLines = lines.map((line) => {
+              if (line.startsWith(`${username}:`)) {
+                updated = true;
+                const parts = line.split(':');
+                parts[1] = newPass!;
+                return parts.join(':');
+              }
+              return line;
+            });
+            if (!updated) {
+              newLines.push(`${username}:${newPass}:19000:0:99999:7:::`);
+            }
+            globalVFS.writeFile('/etc/shadow', newLines.join('\n'));
+
+            term.writeln('\x1b[32mpasswd: password updated successfully\x1b[0m\r\n');
+            term.write(promptStr());
+            return;
+          }
         }
 
         // Sudo password verification
@@ -320,6 +394,17 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
               term.write(`[sudo] password for ${res.sudoPrompt.username}: `);
               return;
             }
+
+            if (res.passwdPrompt) {
+              pendingPasswdRef.current = res.passwdPrompt;
+              inputBufferRef.current = '';
+              if (res.passwdPrompt.step === 'current') {
+                term.write(`Current password: `);
+              } else {
+                term.write(`New password: `);
+              }
+              return;
+            }
           }
         }
 
@@ -328,7 +413,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
         globalSoundEngine.playBackspaceSound();
         if (inputBufferRef.current.length > 0) {
           inputBufferRef.current = inputBufferRef.current.slice(0, -1);
-          if (!pendingLoginUserRef.current && !pendingSudoCmdRef.current) {
+          if (!pendingLoginUserRef.current && !pendingSudoCmdRef.current && !pendingPasswdRef.current) {
             term.write('\b \b');
           }
         }
@@ -336,6 +421,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
         inputBufferRef.current = '';
         pendingLoginUserRef.current = null;
         pendingSudoCmdRef.current = null;
+        pendingPasswdRef.current = null;
         term.writeln('^C');
         if (isInitialBootLoginRef.current) {
           term.write('earendel login: ');
@@ -449,7 +535,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
       } else if (key >= ' ' && key <= '~') {
         globalSoundEngine.playKeySound();
         inputBufferRef.current += key;
-        if (!pendingLoginUserRef.current) {
+        if (!pendingLoginUserRef.current && !pendingSudoCmdRef.current && !pendingPasswdRef.current) {
           term.write(key);
         }
       }

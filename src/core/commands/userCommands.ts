@@ -57,7 +57,11 @@ export const userCommands: Command[] = [
         } else {
           const newOwnerGroup = `${node.owner}:${node.group}`;
           if (verbose) {
-            totalStdout += `ownership of '${target}' retained as ${newOwnerGroup}\n`;
+            if (oldOwnerGroup !== newOwnerGroup) {
+              totalStdout += `changed ownership of '${target}' from ${oldOwnerGroup} to ${newOwnerGroup}\n`;
+            } else {
+              totalStdout += `ownership of '${target}' retained as ${newOwnerGroup}\n`;
+            }
           } else if (changesOnly && oldOwnerGroup !== newOwnerGroup) {
             totalStdout += `changed ownership of '${target}' from ${oldOwnerGroup} to ${newOwnerGroup}\n`;
           }
@@ -68,39 +72,141 @@ export const userCommands: Command[] = [
     },
   },
   {
+    name: 'chgrp',
+    description: 'Change group ownership of files (supports -R, -v, -c, -f)',
+    category: 'file',
+    execute: (ctx) => {
+      const flags = new Set<string>();
+      let targetGroup: string | null = null;
+      const targets: string[] = [];
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg.startsWith('--')) {
+          flags.add(arg.slice(2));
+        } else if (arg.startsWith('-') && arg.length > 1) {
+          for (let j = 1; j < arg.length; j++) flags.add(arg[j]);
+        } else if (!targetGroup) {
+          targetGroup = arg;
+        } else {
+          targets.push(arg);
+        }
+      }
+
+      if (!targetGroup || targets.length === 0) {
+        return { stdout: '', stderr: 'chgrp: missing operand\nUsage: chgrp [-R] GROUP FILE...\n', exitCode: 1 };
+      }
+
+      const recursive = flags.has('R') || flags.has('r') || flags.has('recursive');
+      const verbose = flags.has('v') || flags.has('verbose');
+      const changesOnly = flags.has('c') || flags.has('changes');
+      const silent = flags.has('f') || flags.has('silent') || flags.has('quiet');
+
+      let totalStdout = '';
+      let totalStderr = '';
+      let exitCode = 0;
+
+      for (const target of targets) {
+        const node = ctx.vfs.getNodeByPath(target);
+        if (!node) {
+          if (!silent) {
+            totalStderr += `chgrp: cannot access '${target}': No such file or directory\n`;
+          }
+          exitCode = 1;
+          continue;
+        }
+
+        const oldGroup = node.group;
+        const ok = ctx.vfs.chown(target, `:${targetGroup}`, recursive);
+        if (!ok) {
+          if (!silent) {
+            totalStderr += `chgrp: changing group of '${target}': Operation not permitted\n`;
+          }
+          exitCode = 1;
+        } else {
+          const newGroup = node.group;
+          if (verbose) {
+            if (oldGroup !== newGroup) {
+              totalStdout += `changed group of '${target}' from ${oldGroup} to ${newGroup}\n`;
+            } else {
+              totalStdout += `group of '${target}' retained as ${newGroup}\n`;
+            }
+          } else if (changesOnly && oldGroup !== newGroup) {
+            totalStdout += `changed group of '${target}' from ${oldGroup} to ${newGroup}\n`;
+          }
+        }
+      }
+
+      return { stdout: totalStdout, stderr: totalStderr, exitCode };
+    },
+  },
+  {
     name: 'useradd',
-    description: 'Create a new user (-m, -s, -d, -g, -G, -u)',
+    description: 'Create a new user (-u, -g, -d, -c, -s, -m, -o, -G)',
     category: 'sys',
     execute: (ctx) => {
-      let createHome = false;
+      let explicitCreateHome = false;
+      let explicitNoCreateHome = false;
       let shell = '/bin/bash';
       let homeDir: string | null = null;
+      let comment: string = '';
       let customUid: number | null = null;
+      let allowDuplicateUid = false;
       let primaryGroup: string | null = null;
       let username: string | null = null;
+
+      let supplementaryGroups: string | null = null;
 
       for (let i = 0; i < ctx.args.length; i++) {
         const arg = ctx.args[i];
         if (arg === '-m' || arg === '--create-home') {
-          createHome = true;
+          explicitCreateHome = true;
+        } else if (arg === '-M' || arg === '--no-create-home') {
+          explicitNoCreateHome = true;
         } else if (arg === '-s' && ctx.args[i + 1]) {
           shell = ctx.args[i + 1];
           i++;
+        } else if (arg.startsWith('-s=')) {
+          shell = arg.slice(3);
         } else if (arg === '-d' && ctx.args[i + 1]) {
           homeDir = ctx.args[i + 1];
           i++;
+        } else if (arg.startsWith('-d=')) {
+          homeDir = arg.slice(3);
+        } else if (arg === '-c' && ctx.args[i + 1]) {
+          comment = ctx.args[i + 1];
+          i++;
+        } else if (arg.startsWith('-c=')) {
+          comment = arg.slice(3);
         } else if (arg === '-u' && ctx.args[i + 1]) {
           customUid = parseInt(ctx.args[i + 1], 10);
           i++;
+        } else if (arg.startsWith('-u=')) {
+          customUid = parseInt(arg.slice(3), 10);
+        } else if (arg === '-o' || arg === '--non-unique') {
+          allowDuplicateUid = true;
         } else if (arg === '-g' && ctx.args[i + 1]) {
           primaryGroup = ctx.args[i + 1];
           i++;
+        } else if (arg.startsWith('-g=')) {
+          primaryGroup = arg.slice(3);
+        } else if (arg === '-G' && ctx.args[i + 1]) {
+          supplementaryGroups = ctx.args[i + 1];
+          i++;
+        } else if (arg.startsWith('-G=')) {
+          supplementaryGroups = arg.slice(3);
         } else if (!arg.startsWith('-')) {
           username = arg;
         }
       }
 
-      if (!username) return { stdout: '', stderr: 'useradd: missing username\nUsage: useradd [options] LOGIN\n', exitCode: 1 };
+      if (!username) {
+        return {
+          stdout: '',
+          stderr: 'Usage: useradd [options] LOGIN\n\nOptions:\n  -c, --comment COMMENT         GECOS field of the new account\n  -d, --home-dir HOME_DIR       home directory of the new account\n  -g, --gid GROUP               name or ID of the primary group of the new account\n  -G, --groups GROUPS           list of supplementary groups of the new account\n  -m, --create-home             create the user\'s home directory\n  -o, --non-unique              allow to create users with duplicate (non-unique) UID\n  -s, --shell SHELL             login shell of the new account\n  -u, --uid UID                 user ID of the new account\n',
+          exitCode: 1,
+        };
+      }
 
       const passwdContent = ctx.vfs.readFile('/etc/passwd') ?? '';
       if (passwdContent.includes(`${username}:`)) {
@@ -111,23 +217,80 @@ export const userCommands: Command[] = [
         .split('\n')
         .map((l) => parseInt(l.split(':')[2], 10))
         .filter((u) => !isNaN(u));
-      const uid = customUid !== null && !isNaN(customUid) ? customUid : (existingUids.length > 0 ? Math.max(...existingUids, 999) + 1 : 1000);
-      const userHome = homeDir || `/home/${username}`;
 
-      const newPasswdLine = `${username}:x:${uid}:${uid}:${username}:${userHome}:${shell}\n`;
+      // Check UID collision if -o is not provided
+      if (customUid !== null && !isNaN(customUid)) {
+        if (!allowDuplicateUid && existingUids.includes(customUid)) {
+          return { stdout: '', stderr: `useradd: UID ${customUid} is not unique\n`, exitCode: 4 };
+        }
+      }
+
+      const uid = customUid !== null && !isNaN(customUid) ? customUid : (existingUids.length > 0 ? Math.max(...existingUids, 999) + 1 : 1000);
+
+      // Determine primary GID
+      let gid = uid;
+      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      let groupLines = groupContent.split('\n');
+
+      if (primaryGroup) {
+        const parsedGid = parseInt(primaryGroup, 10);
+        let found = false;
+        for (const line of groupLines) {
+          const parts = line.split(':');
+          if (parts[0] === primaryGroup || (!isNaN(parsedGid) && parseInt(parts[2], 10) === parsedGid)) {
+            gid = parseInt(parts[2], 10);
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          return { stdout: '', stderr: `useradd: group '${primaryGroup}' does not exist\n`, exitCode: 6 };
+        }
+      } else {
+        // Create user's private group with same name and gid=uid if not already exists
+        if (!groupContent.includes(`${username}:`)) {
+          groupLines.push(`${username}:x:${gid}:`);
+        }
+      }
+
+      // Add to supplementary groups (-G)
+      if (supplementaryGroups) {
+        const suppGroupNames = supplementaryGroups.split(',').map((g) => g.trim()).filter(Boolean);
+        for (const gName of suppGroupNames) {
+          const exists = groupLines.some((l) => l.split(':')[0] === gName);
+          if (!exists) {
+            return { stdout: '', stderr: `useradd: group '${gName}' does not exist\n`, exitCode: 6 };
+          }
+        }
+
+        groupLines = groupLines.map((line) => {
+          if (!line.trim()) return line;
+          const parts = line.split(':');
+          if (suppGroupNames.includes(parts[0])) {
+            const members = (parts[3] || '').split(',').map((m) => m.trim()).filter(Boolean);
+            if (!members.includes(username!)) members.push(username!);
+            parts[3] = members.join(',');
+            return parts.join(':');
+          }
+          return line;
+        });
+      }
+
+      ctx.vfs.writeFile('/etc/group', groupLines.filter(Boolean).join('\n') + '\n');
+
+      const userHome = homeDir || `/home/${username}`;
+      const userComment = comment || username;
+      const newPasswdLine = `${username}:x:${uid}:${gid}:${userComment}:${userHome}:${shell}\n`;
       ctx.vfs.writeFile('/etc/passwd', passwdContent + (passwdContent.endsWith('\n') ? '' : '\n') + newPasswdLine);
 
       const shadowContent = ctx.vfs.readFile('/etc/shadow') ?? '';
       ctx.vfs.writeFile('/etc/shadow', shadowContent + (shadowContent.endsWith('\n') ? '' : '\n') + `${username}:${username}:19000:0:99999:7:::\n`);
 
-      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
-      if (!groupContent.includes(`${username}:`)) {
-        ctx.vfs.writeFile('/etc/group', groupContent + (groupContent.endsWith('\n') ? '' : '\n') + `${username}:x:${uid}:\n`);
-      }
-
-      if (createHome || !homeDir) {
+      // Create home directory if -m is specified, or default create home when not explicitly disabled by -M
+      const shouldCreateHome = explicitCreateHome || (!explicitNoCreateHome && !homeDir);
+      if (shouldCreateHome) {
         ctx.vfs.mkdir(userHome, true);
-        ctx.vfs.chown(userHome, `${username}:${username}`, true);
+        ctx.vfs.chown(userHome, `${username}:${primaryGroup || username}`, true);
         ctx.vfs.chmod(userHome, '755');
       }
 
@@ -140,33 +303,82 @@ export const userCommands: Command[] = [
     category: 'sys',
     execute: (ctx) => {
       let removeHome = false;
+      let force = false;
       let username: string | null = null;
 
       for (const arg of ctx.args) {
         if (arg === '-r' || arg === '--remove') {
           removeHome = true;
+        } else if (arg === '-f' || arg === '--force') {
+          force = true;
+        } else if (arg === '-rf' || arg === '-fr') {
+          removeHome = true;
+          force = true;
         } else if (!arg.startsWith('-')) {
           username = arg;
         }
       }
 
-      if (!username) return { stdout: '', stderr: 'userdel: missing username\nUsage: userdel [-r] LOGIN\n', exitCode: 1 };
+      if (!username) {
+        return { stdout: '', stderr: 'Usage: userdel [options] LOGIN\n\nOptions:\n  -f, --force                   force removal of files, even if not owned by user\n  -r, --remove                  remove home directory and mail spool\n', exitCode: 1 };
+      }
+
+      // Check if user is currently logged in
+      const currentUser = ctx.env['USER'] || 'root';
+      if (username === currentUser && !force) {
+        return { stdout: '', stderr: `userdel: user ${username} is currently used by process\n`, exitCode: 8 };
+      }
 
       const passwdContent = ctx.vfs.readFile('/etc/passwd') ?? '';
-      if (!passwdContent.includes(`${username}:`)) {
+      const passwdLines = passwdContent.split('\n');
+      const userLine = passwdLines.find((l) => l.startsWith(`${username}:`));
+
+      if (!userLine) {
         return { stdout: '', stderr: `userdel: user '${username}' does not exist\n`, exitCode: 6 };
       }
 
-      const lines = passwdContent.split('\n').filter((l) => !l.startsWith(`${username}:`));
-      ctx.vfs.writeFile('/etc/passwd', lines.join('\n'));
+      const userParts = userLine.split(':');
+      const userHome = userParts[5] || `/home/${username}`;
 
+      // Remove from /etc/passwd
+      const remainingPasswd = passwdLines.filter((l) => !l.startsWith(`${username}:`));
+      ctx.vfs.writeFile('/etc/passwd', remainingPasswd.join('\n'));
+
+      // Remove from /etc/shadow
       const shadowContent = ctx.vfs.readFile('/etc/shadow') ?? '';
-      const sLines = shadowContent.split('\n').filter((l) => !l.startsWith(`${username}:`));
-      ctx.vfs.writeFile('/etc/shadow', sLines.join('\n'));
+      const remainingShadow = shadowContent.split('\n').filter((l) => !l.startsWith(`${username}:`));
+      ctx.vfs.writeFile('/etc/shadow', remainingShadow.join('\n'));
 
-      if (removeHome) {
-        ctx.vfs.remove(`/home/${username}`, true);
+      // Remove user from supplementary groups in /etc/group
+      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      const remainingGroup = groupContent.split('\n').map((l) => {
+        if (!l.trim()) return l;
+        const parts = l.split(':');
+        // Also remove user's primary group if it has the same name and no other members
+        if (parts[3]) {
+          const members = parts[3].split(',').map((m) => m.trim()).filter((m) => m && m !== username);
+          parts[3] = members.join(',');
+        }
+        return parts.join(':');
+      }).filter((l) => {
+        // If the group is user's private group and empty, remove it (standard userdel behavior)
+        const parts = l.split(':');
+        return !(parts[0] === username && (!parts[3] || parts[3].trim() === ''));
+      });
+      ctx.vfs.writeFile('/etc/group', remainingGroup.join('\n'));
+
+      // Remove home directory and mail spool if -r or -f is specified
+      if (removeHome || force) {
+        if (userHome && userHome !== '/' && userHome !== '/root') {
+          ctx.vfs.remove(userHome, true);
+        }
+        // Also clean up mail spool if exists
+        const mailSpool = `/var/mail/${username}`;
+        if (ctx.vfs.getNodeByPath(mailSpool)) {
+          ctx.vfs.remove(mailSpool, true);
+        }
       }
+
       return { stdout: '', stderr: '', exitCode: 0 };
     },
   },
@@ -221,10 +433,10 @@ export const userCommands: Command[] = [
     description: 'Change user password (-d, -l, -u)',
     category: 'sys',
     execute: (ctx) => {
-      let username = ctx.env['USER'] || 'hello';
+      const currentUser = ctx.env['USER'] || 'hello';
+      let username = currentUser;
       let deletePass = false;
       let lockPass = false;
-      let newPass: string | null = null;
 
       for (let i = 0; i < ctx.args.length; i++) {
         const arg = ctx.args[i];
@@ -233,43 +445,61 @@ export const userCommands: Command[] = [
         } else if (arg === '-l' || arg === '--lock') {
           lockPass = true;
         } else if (!arg.startsWith('-')) {
-          if (!newPass && username !== ctx.env['USER']) {
-            newPass = arg;
-          } else {
-            username = arg;
-          }
+          username = arg;
         }
+      }
+
+      const passwdContent = ctx.vfs.readFile('/etc/passwd') ?? '';
+      if (username !== 'root' && !passwdContent.includes(`${username}:`)) {
+        return { stdout: '', stderr: `passwd: user '${username}' does not exist\n`, exitCode: 1 };
+      }
+
+      // Non-root users can only change their own password
+      if (currentUser !== 'root' && username !== currentUser) {
+        return { stdout: '', stderr: 'passwd: You may not view or modify password information for ' + username + '.\n', exitCode: 1 };
       }
 
       const shadowContent = ctx.vfs.readFile('/etc/shadow') ?? '';
       const lines = shadowContent.split('\n');
-      let updated = false;
 
-      const newLines = lines.map((line) => {
-        if (line.startsWith(`${username}:`)) {
-          updated = true;
-          const parts = line.split(':');
-          if (deletePass) {
+      if (deletePass) {
+        const newLines = lines.map((line) => {
+          if (line.startsWith(`${username}:`)) {
+            const parts = line.split(':');
             parts[1] = '';
-          } else if (lockPass) {
-            parts[1] = '!' + parts[1];
-          } else {
-            parts[1] = newPass || username;
+            return parts.join(':');
           }
-          return parts.join(':');
-        }
-        return line;
-      });
-
-      if (!updated) {
-        newLines.push(`${username}:${newPass || username}:19000:0:99999:7:::`);
+          return line;
+        });
+        ctx.vfs.writeFile('/etc/shadow', newLines.join('\n'));
+        return { stdout: `passwd: password expiry information changed.\n`, stderr: '', exitCode: 0 };
       }
 
-      ctx.vfs.writeFile('/etc/shadow', newLines.join('\n'));
+      if (lockPass) {
+        const newLines = lines.map((line) => {
+          if (line.startsWith(`${username}:`)) {
+            const parts = line.split(':');
+            if (!parts[1].startsWith('!')) parts[1] = '!' + parts[1];
+            return parts.join(':');
+          }
+          return line;
+        });
+        ctx.vfs.writeFile('/etc/shadow', newLines.join('\n'));
+        return { stdout: `passwd: password expiry information changed.\n`, stderr: '', exitCode: 0 };
+      }
+
+      // Interactive flow:
+      // If current user is not root, must first ask for Current password
+      // If root, directly ask for New password
+      const initialStep = currentUser === 'root' ? 'new' : 'current';
       return {
-        stdout: `passwd: password updated for ${username} successfully.\n`,
+        stdout: `Changing password for ${username}.\n`,
         stderr: '',
         exitCode: 0,
+        passwdPrompt: {
+          username,
+          step: initialStep,
+        },
       };
     },
   },
@@ -550,6 +780,491 @@ export const userCommands: Command[] = [
       const fullOut = `uid=${uid}(${username}) gid=${gid}(${primaryGroupName}) groups=${groupsStr}\n`;
 
       return { stdout: fullOut, stderr: '', exitCode: 0 };
+    },
+  },
+  {
+    name: 'usermod',
+    description: 'Modify a user account (-a, -G, -g, -d, -s, -l, -u, -L, -U)',
+    category: 'sys',
+    execute: (ctx) => {
+      let appendGroups = false;
+      let newGroups: string | null = null;
+      let newPrimaryGroup: string | null = null;
+      let newHome: string | null = null;
+      let moveHome = false;
+      let newShell: string | null = null;
+      let newLogin: string | null = null;
+      let newUid: number | null = null;
+      let newComment: string | null = null;
+      let allowDuplicateUid = false;
+      let lockAccount = false;
+      let unlockAccount = false;
+      let username: string | null = null;
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg === '-a' || arg === '--append') {
+          appendGroups = true;
+        } else if (arg === '-G' && ctx.args[i + 1]) {
+          newGroups = ctx.args[i + 1];
+          i++;
+        } else if (arg.startsWith('-G=')) {
+          newGroups = arg.slice(3);
+        } else if (arg === '-aG' || arg === '-Ga') {
+          appendGroups = true;
+          if (ctx.args[i + 1]) {
+            newGroups = ctx.args[i + 1];
+            i++;
+          }
+        } else if (arg === '-g' && ctx.args[i + 1]) {
+          newPrimaryGroup = ctx.args[i + 1];
+          i++;
+        } else if (arg.startsWith('-g=')) {
+          newPrimaryGroup = arg.slice(3);
+        } else if (arg === '-d' && ctx.args[i + 1]) {
+          newHome = ctx.args[i + 1];
+          i++;
+        } else if (arg.startsWith('-d=')) {
+          newHome = arg.slice(3);
+        } else if (arg === '-c' && ctx.args[i + 1]) {
+          newComment = ctx.args[i + 1];
+          i++;
+        } else if (arg.startsWith('-c=')) {
+          newComment = arg.slice(3);
+        } else if (arg === '-m' || arg === '--move-home') {
+          moveHome = true;
+        } else if (arg === '-o' || arg === '--non-unique') {
+          allowDuplicateUid = true;
+        } else if (arg === '-s' && ctx.args[i + 1]) {
+          newShell = ctx.args[i + 1];
+          i++;
+        } else if (arg.startsWith('-s=')) {
+          newShell = arg.slice(3);
+        } else if (arg === '-l' && ctx.args[i + 1]) {
+          newLogin = ctx.args[i + 1];
+          i++;
+        } else if (arg.startsWith('-l=')) {
+          newLogin = arg.slice(3);
+        } else if (arg === '-u' && ctx.args[i + 1]) {
+          newUid = parseInt(ctx.args[i + 1], 10);
+          i++;
+        } else if (arg.startsWith('-u=')) {
+          newUid = parseInt(arg.slice(3), 10);
+        } else if (arg === '-L' || arg === '--lock') {
+          lockAccount = true;
+        } else if (arg === '-U' || arg === '--unlock') {
+          unlockAccount = true;
+        } else if (!arg.startsWith('-')) {
+          username = arg;
+        }
+      }
+
+      if (!username) {
+        return {
+          stdout: '',
+          stderr: 'Usage: usermod [options] LOGIN\n\nOptions:\n  -c, --comment COMMENT         new value of the GECOS field\n  -d, --home HOME_DIR           new home directory for user account\n  -m, --move-home               move contents of home directory to new location (use with -d)\n  -g, --gid GROUP               force use GROUP as new primary group\n  -G, --groups GROUPS           new list of supplementary groups\n  -a, --append                  append user to supplementary groups (use with -G)\n  -l, --login NEW_LOGIN         new value of the login name\n  -s, --shell SHELL             new login shell\n  -u, --uid UID                 new UID\n  -o, --non-unique              allow using duplicate (non-unique) UID when with -u\n  -L, --lock                    lock user account\n  -U, --unlock                  unlock user account\n',
+          exitCode: 2,
+        };
+      }
+
+      const passwdContent = ctx.vfs.readFile('/etc/passwd') ?? '';
+      const passwdLines = passwdContent.split('\n');
+      const userIndex = passwdLines.findIndex((line) => line.startsWith(`${username}:`));
+      if (userIndex === -1) {
+        return { stdout: '', stderr: `usermod: user '${username}' does not exist\n`, exitCode: 6 };
+      }
+
+      const userParts = passwdLines[userIndex].split(':');
+      const oldHome = userParts[5];
+
+      // Handle new login name collision
+      if (newLogin && newLogin !== username) {
+        if (passwdLines.some((l) => l.startsWith(`${newLogin}:`))) {
+          return { stdout: '', stderr: `usermod: user '${newLogin}' already exists\n`, exitCode: 9 };
+        }
+      }
+
+      // Check UID uniqueness unless -o is provided
+      if (newUid !== null && !isNaN(newUid)) {
+        if (!allowDuplicateUid) {
+          const uidExists = passwdLines.some((l) => {
+            const parts = l.split(':');
+            return parts[0] !== username && parseInt(parts[2], 10) === newUid;
+          });
+          if (uidExists) {
+            return { stdout: '', stderr: `usermod: UID '${newUid}' already exists\n`, exitCode: 4 };
+          }
+        }
+      }
+
+      // Handle new primary group
+      let resolvedPrimaryGid: number | null = null;
+      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      let groupLines = groupContent.split('\n');
+
+      if (newPrimaryGroup) {
+        const parsedGid = parseInt(newPrimaryGroup, 10);
+        let found = false;
+        for (const line of groupLines) {
+          const parts = line.split(':');
+          if (parts[0] === newPrimaryGroup || (!isNaN(parsedGid) && parseInt(parts[2], 10) === parsedGid)) {
+            resolvedPrimaryGid = parseInt(parts[2], 10);
+            found = true;
+            break;
+          }
+        }
+        if (!found) {
+          return { stdout: '', stderr: `usermod: group '${newPrimaryGroup}' does not exist\n`, exitCode: 6 };
+        }
+      }
+
+      // Supplementary groups (-G)
+      if (newGroups !== null) {
+        const targetGroupNames = newGroups.split(',').map((g) => g.trim()).filter(Boolean);
+        // Verify groups exist
+        for (const gName of targetGroupNames) {
+          const exists = groupLines.some((l) => l.split(':')[0] === gName);
+          if (!exists) {
+            return { stdout: '', stderr: `usermod: group '${gName}' does not exist\n`, exitCode: 6 };
+          }
+        }
+
+        groupLines = groupLines.map((line) => {
+          if (!line.trim()) return line;
+          const parts = line.split(':');
+          const gName = parts[0];
+          let members = (parts[3] || '').split(',').map((m) => m.trim()).filter(Boolean);
+
+          if (appendGroups) {
+            if (targetGroupNames.includes(gName) && !members.includes(username!)) {
+              members.push(username!);
+            }
+          } else {
+            // Replace supplementary groups
+            if (targetGroupNames.includes(gName)) {
+              if (!members.includes(username!)) members.push(username!);
+            } else {
+              members = members.filter((m) => m !== username);
+            }
+          }
+
+          parts[3] = members.join(',');
+          return parts.join(':');
+        });
+
+        ctx.vfs.writeFile('/etc/group', groupLines.join('\n'));
+      }
+
+      // Update /etc/passwd fields
+      // Format: username:password:uid:gid:comment:home:shell
+      if (newLogin) userParts[0] = newLogin;
+      if (newUid !== null && !isNaN(newUid)) userParts[2] = newUid.toString();
+      if (resolvedPrimaryGid !== null) userParts[3] = resolvedPrimaryGid.toString();
+      if (newComment !== null) userParts[4] = newComment;
+      if (newHome) userParts[5] = newHome;
+      if (newShell) userParts[6] = newShell;
+      passwdLines[userIndex] = userParts.join(':');
+      ctx.vfs.writeFile('/etc/passwd', passwdLines.join('\n'));
+
+      // If username renamed, rename in /etc/group and /etc/shadow
+      if (newLogin && newLogin !== username) {
+        const finalGroupContent = ctx.vfs.readFile('/etc/group') ?? '';
+        const updatedGroups = finalGroupContent.split('\n').map((l) => {
+          const parts = l.split(':');
+          if (parts[0] === username) parts[0] = newLogin!;
+          if (parts[3]) {
+            parts[3] = parts[3].split(',').map((m) => (m.trim() === username ? newLogin! : m.trim())).join(',');
+          }
+          return parts.join(':');
+        });
+        ctx.vfs.writeFile('/etc/group', updatedGroups.join('\n'));
+
+        const shadowContent = ctx.vfs.readFile('/etc/shadow') ?? '';
+        const updatedShadow = shadowContent.split('\n').map((l) => {
+          if (l.startsWith(`${username}:`)) {
+            return `${newLogin}:${l.slice(username!.length + 1)}`;
+          }
+          return l;
+        });
+        ctx.vfs.writeFile('/etc/shadow', updatedShadow.join('\n'));
+      }
+
+      // Lock / unlock account
+      if (lockAccount || unlockAccount) {
+        const currentTarget = newLogin || username;
+        const shadowContent = ctx.vfs.readFile('/etc/shadow') ?? '';
+        const updatedShadow = shadowContent.split('\n').map((l) => {
+          if (l.startsWith(`${currentTarget}:`)) {
+            const parts = l.split(':');
+            if (lockAccount && !parts[1].startsWith('!')) {
+              parts[1] = '!' + parts[1];
+            } else if (unlockAccount && parts[1].startsWith('!')) {
+              parts[1] = parts[1].replace(/^!+/, '');
+            }
+            return parts.join(':');
+          }
+          return l;
+        });
+        ctx.vfs.writeFile('/etc/shadow', updatedShadow.join('\n'));
+      }
+
+      // Move home directory if requested (-m)
+      if (moveHome && newHome && oldHome && oldHome !== newHome) {
+        const oldNode = ctx.vfs.getNodeByPath(oldHome);
+        if (oldNode) {
+          // Recursive copy function
+          const copySingle = (srcPath: string, targetPath: string) => {
+            const node = ctx.vfs.getNodeByPath(srcPath);
+            if (!node) return;
+            if (node.type === 'directory') {
+              ctx.vfs.mkdir(targetPath, true);
+              const dirNode = ctx.vfs.getNodeByPath(targetPath);
+              if (dirNode) {
+                dirNode.permissions = node.permissions;
+                dirNode.owner = node.owner;
+                dirNode.group = node.group;
+              }
+              if (node.children) {
+                for (const child of node.children.values()) {
+                  copySingle(`${srcPath}/${child.name}`, `${targetPath}/${child.name}`);
+                }
+              }
+            } else {
+              ctx.vfs.writeFile(targetPath, node.content ?? '');
+              const fileNode = ctx.vfs.getNodeByPath(targetPath);
+              if (fileNode) {
+                fileNode.permissions = node.permissions;
+                fileNode.owner = node.owner;
+                fileNode.group = node.group;
+              }
+            }
+          };
+
+          copySingle(oldHome, newHome);
+          ctx.vfs.remove(oldHome, true);
+
+          const finalOwner = newLogin || username;
+          ctx.vfs.chown(newHome, `${finalOwner}:${finalOwner}`, true);
+        }
+      }
+
+      return { stdout: '', stderr: '', exitCode: 0 };
+    },
+  },
+  {
+    name: 'groupmod',
+    description: 'Modify a group definition on the system (-g <gid>, -n <new_name>)',
+    category: 'sys',
+    execute: (ctx) => {
+      let newGid: number | null = null;
+      let newName: string | null = null;
+      let groupname: string | null = null;
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg === '-g' && ctx.args[i + 1]) {
+          newGid = parseInt(ctx.args[i + 1], 10);
+          i++;
+        } else if (arg.startsWith('-g=')) {
+          newGid = parseInt(arg.slice(3), 10);
+        } else if (arg === '-n' && ctx.args[i + 1]) {
+          newName = ctx.args[i + 1];
+          i++;
+        } else if (arg.startsWith('-n=')) {
+          newName = arg.slice(3);
+        } else if (!arg.startsWith('-')) {
+          groupname = arg;
+        }
+      }
+
+      if (!groupname) {
+        return {
+          stdout: '',
+          stderr: 'Usage: groupmod [options] GROUP\n\nOptions:\n  -g, --gid GID         change the group ID\n  -n, --new-name NEW    change the group name\n',
+          exitCode: 2,
+        };
+      }
+
+      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      const lines = groupContent.split('\n');
+      const groupIndex = lines.findIndex((l) => l.startsWith(`${groupname}:`));
+
+      if (groupIndex === -1) {
+        return { stdout: '', stderr: `groupmod: group '${groupname}' does not exist\n`, exitCode: 6 };
+      }
+
+      if (newName && newName !== groupname && lines.some((l) => l.startsWith(`${newName}:`))) {
+        return { stdout: '', stderr: `groupmod: group '${newName}' already exists\n`, exitCode: 9 };
+      }
+
+      const parts = lines[groupIndex].split(':');
+      if (newGid !== null && !isNaN(newGid)) {
+        parts[2] = newGid.toString();
+      }
+      if (newName) {
+        parts[0] = newName;
+      }
+      lines[groupIndex] = parts.join(':');
+      ctx.vfs.writeFile('/etc/group', lines.join('\n'));
+
+      return { stdout: '', stderr: '', exitCode: 0 };
+    },
+  },
+  {
+    name: 'gpasswd',
+    description: 'Administer /etc/group and /etc/gshadow (-a, -d, -M, -A, -r, -R)',
+    category: 'sys',
+    execute: (ctx) => {
+      let addUser: string | null = null;
+      let delUser: string | null = null;
+      let membersList: string | null = null;
+      let removePassword = false;
+      let groupname: string | null = null;
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg === '-a' && ctx.args[i + 1]) {
+          addUser = ctx.args[i + 1];
+          i++;
+        } else if (arg.startsWith('-a=')) {
+          addUser = arg.slice(3);
+        } else if (arg === '-d' && ctx.args[i + 1]) {
+          delUser = ctx.args[i + 1];
+          i++;
+        } else if (arg.startsWith('-d=')) {
+          delUser = arg.slice(3);
+        } else if (arg === '-M' && ctx.args[i + 1]) {
+          membersList = ctx.args[i + 1];
+          i++;
+        } else if (arg === '-r' || arg === '--delete') {
+          removePassword = true;
+        } else if (!arg.startsWith('-')) {
+          groupname = arg;
+        }
+      }
+
+      if (!groupname) {
+        return {
+          stdout: '',
+          stderr: 'Usage: gpasswd [option] GROUP\n\nOptions:\n  -a, --add USER              add user to GROUP\n  -d, --delete USER           remove user from GROUP\n  -M, --members USER,...      set the list of members of GROUP\n  -r, --remove-password       remove the GROUP\'s password\n',
+          exitCode: 1,
+        };
+      }
+
+      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      const lines = groupContent.split('\n');
+      const groupIndex = lines.findIndex((l) => l.startsWith(`${groupname}:`));
+
+      if (groupIndex === -1) {
+        return { stdout: '', stderr: `gpasswd: group '${groupname}' does not exist\n`, exitCode: 1 };
+      }
+
+      const parts = lines[groupIndex].split(':');
+      let currentMembers = (parts[3] || '').split(',').map((m) => m.trim()).filter(Boolean);
+
+      if (addUser) {
+        const passwdContent = ctx.vfs.readFile('/etc/passwd') ?? '';
+        if (addUser !== 'root' && !passwdContent.includes(`${addUser}:`)) {
+          return { stdout: '', stderr: `gpasswd: user '${addUser}' does not exist\n`, exitCode: 1 };
+        }
+        if (!currentMembers.includes(addUser)) {
+          currentMembers.push(addUser);
+        }
+        parts[3] = currentMembers.join(',');
+        lines[groupIndex] = parts.join(':');
+        ctx.vfs.writeFile('/etc/group', lines.join('\n'));
+        return { stdout: `Adding user ${addUser} to group ${groupname}\n`, stderr: '', exitCode: 0 };
+      }
+
+      if (delUser) {
+        if (!currentMembers.includes(delUser)) {
+          return { stdout: '', stderr: `gpasswd: user '${delUser}' is not a member of '${groupname}'\n`, exitCode: 1 };
+        }
+        currentMembers = currentMembers.filter((m) => m !== delUser);
+        parts[3] = currentMembers.join(',');
+        lines[groupIndex] = parts.join(':');
+        ctx.vfs.writeFile('/etc/group', lines.join('\n'));
+        return { stdout: `Removing user ${delUser} from group ${groupname}\n`, stderr: '', exitCode: 0 };
+      }
+
+      if (membersList !== null) {
+        const newMembers = membersList.split(',').map((m) => m.trim()).filter(Boolean);
+        parts[3] = newMembers.join(',');
+        lines[groupIndex] = parts.join(':');
+        ctx.vfs.writeFile('/etc/group', lines.join('\n'));
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+
+      if (removePassword) {
+        parts[1] = 'x';
+        lines[groupIndex] = parts.join(':');
+        ctx.vfs.writeFile('/etc/group', lines.join('\n'));
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+
+      return { stdout: `Password updated for group ${groupname}\n`, stderr: '', exitCode: 0 };
+    },
+  },
+  {
+    name: 'last',
+    description: 'Show a listing of last logged in users (-n, -a, -F, -R)',
+    category: 'sys',
+    execute: (ctx) => {
+      let limit: number | null = null;
+      let targetUser: string | null = null;
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if ((arg === '-n' || arg === '--limit') && ctx.args[i + 1]) {
+          limit = parseInt(ctx.args[i + 1], 10);
+          i++;
+        } else if (/^-\d+$/.test(arg)) {
+          limit = parseInt(arg.slice(1), 10);
+        } else if (!arg.startsWith('-')) {
+          targetUser = arg;
+        }
+      }
+
+      const currentUser = ctx.env['USER'] || 'hello';
+      const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+      const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+      const now = new Date();
+      const dayName = days[now.getDay()];
+      const monthName = months[now.getMonth()];
+      const dateNum = String(now.getDate()).padStart(2, ' ');
+      const timeStr = now.toTimeString().substring(0, 5);
+
+      const bootDate = new Date(now.getTime() - 2 * 86400000 - 4 * 3600000);
+      const bootDay = days[bootDate.getDay()];
+      const bootMonth = months[bootDate.getMonth()];
+      const bootDateNum = String(bootDate.getDate()).padStart(2, ' ');
+      const bootTimeStr = bootDate.toTimeString().substring(0, 5);
+
+      const prevLoginDate = new Date(now.getTime() - 3600000 * 5);
+      const prevDay = days[prevLoginDate.getDay()];
+      const prevMonth = months[prevLoginDate.getMonth()];
+      const prevDateNum = String(prevLoginDate.getDate()).padStart(2, ' ');
+      const prevTimeStr = prevLoginDate.toTimeString().substring(0, 5);
+
+      let records = [
+        `${currentUser.padEnd(8)} pts/0        127.0.0.1        ${dayName} ${monthName} ${dateNum} ${timeStr}   still logged in`,
+        `root     pts/1        127.0.0.1        ${prevDay} ${prevMonth} ${prevDateNum} ${prevTimeStr} - ${timeStr}  (05:00)`,
+        `${currentUser.padEnd(8)} tty1         :0               ${prevDay} ${prevMonth} ${prevDateNum} 09:15 - 18:20  (09:05)`,
+        `reboot   system boot  5.15.0-88-generi ${bootDay} ${bootMonth} ${bootDateNum} ${bootTimeStr}   still running`,
+      ];
+
+      if (targetUser) {
+        records = records.filter((r) => r.startsWith(targetUser!));
+      }
+
+      if (limit !== null && !isNaN(limit) && limit > 0) {
+        records = records.slice(0, limit);
+      }
+
+      const btimeStr = `${bootDay} ${bootMonth} ${bootDateNum} ${bootTimeStr}`;
+      const output = records.join('\n') + `\n\nwtmp begins ${btimeStr}\n`;
+
+      return { stdout: output, stderr: '', exitCode: 0 };
     },
   },
 ];

@@ -371,18 +371,23 @@ export const fileCommands: Command[] = [
             continue;
           }
           const node = ctx.vfs.getNodeByPath(arg);
-          if (node && !ctx.vfs.checkPermission(node, 'r', user)) {
-            stderr += `cat: ${arg}: Permission denied\n`;
-            exitCode = 1;
-            continue;
-          }
-          const readRes = await syscall(SyscallNo.SYS_READ, arg);
-          if (readRes.code !== 0 || readRes.data === null || readRes.data === undefined) {
+          if (!node || node.type !== 'file') {
             stderr += `cat: ${arg}: No such file or directory\n`;
             exitCode = 1;
             continue;
           }
-          rawInputs.push(readRes.data ?? '');
+          if (!ctx.vfs.checkPermission(node, 'r', user)) {
+            stderr += `cat: ${arg}: Permission denied\n`;
+            exitCode = 1;
+            continue;
+          }
+          const content = ctx.vfs.readFile(arg, user);
+          if (content === null) {
+            stderr += `cat: ${arg}: Permission denied\n`;
+            exitCode = 1;
+            continue;
+          }
+          rawInputs.push(content);
         }
 
         if (exitCode !== 0 && rawInputs.length === 0) {

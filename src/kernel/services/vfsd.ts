@@ -87,17 +87,17 @@ export class VFSDaemonService {
       }
 
       case 'SYS_READ': {
+        const pcb = this.getPCB(msg.senderPid);
         if (typeof payload.fd === 'number') {
-          const pcb = this.getPCB(msg.senderPid);
           const desc = pcb.fds.get(payload.fd);
           if (!desc) return { content: null, error: 'EBADF: Bad file descriptor' };
-          const fullContent = globalVFS.readFile(desc.path) ?? '';
+          const fullContent = globalVFS.readFile(desc.path, pcb.user || 'hello') ?? '';
           const count = typeof payload.count === 'number' ? payload.count : fullContent.length;
           const readChunk = fullContent.slice(desc.offset, desc.offset + count);
           desc.offset += readChunk.length;
           return { content: readChunk, bytesRead: readChunk.length };
         }
-        const content = globalVFS.readFile(payload.path);
+        const content = globalVFS.readFile(payload.path, pcb.user || 'hello');
         return { content };
       }
 

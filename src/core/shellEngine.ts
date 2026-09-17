@@ -72,6 +72,18 @@ export class ShellEngine {
     return this.history;
   }
 
+  clearHistory(): void {
+    this.history = [];
+  }
+
+  deleteHistoryIndex(index: number): boolean {
+    if (index >= 0 && index < this.history.length) {
+      this.history.splice(index, 1);
+      return true;
+    }
+    return false;
+  }
+
   private expandVariables(text: string, scriptArgs: string[] = []): string {
     return text.replace(/\$(?:\{([^}]+)\}|(\w+|\d+|\?|#|@|\*))/g, (match, p1, p2) => {
       const varName = p1 || p2;
@@ -179,6 +191,7 @@ export class ShellEngine {
       let currentStream: AsyncIterable<string> | null = null;
       let inputData = '';
       let lastResult: ExecutionResult = { stdout: '', stderr: '', exitCode: 0 };
+      let aggregatedStderr = '';
 
       for (let i = 0; i < pipelineCmds.length; i++) {
         const cmdStr = pipelineCmds[i];
@@ -195,6 +208,8 @@ export class ShellEngine {
             args: cmdArgs,
             pipeInput: inputData,
             processManager: this.processManager,
+            shellEngine: this,
+            history: this.history,
           };
 
           const inputStream: AsyncIterable<string> = currentStream || (async function* () {
@@ -218,6 +233,9 @@ export class ShellEngine {
           }
 
           lastResult = await this.executeSingleCommand(cmdStr, inputData);
+          if (lastResult.stderr) {
+            aggregatedStderr += lastResult.stderr;
+          }
           if (lastResult.exitCode !== 0) break;
           inputData = lastResult.stdout;
         }
@@ -228,7 +246,9 @@ export class ShellEngine {
         for await (const chunk of currentStream) {
           finalOutput += chunk;
         }
-        lastResult = { stdout: finalOutput, stderr: '', exitCode: 0 };
+        lastResult = { stdout: finalOutput, stderr: aggregatedStderr, exitCode: 0 };
+      } else {
+        lastResult.stderr = aggregatedStderr;
       }
 
       this.env['?'] = lastResult.exitCode.toString();
@@ -604,15 +624,27 @@ export class ShellEngine {
         args: cmdArgs,
         pipeInput,
         processManager: globalProcessManager,
+        shellEngine: this,
+        history: this.history,
       };
       res = await globalCommandRegistry.execute(cmdName, ctx);
     }
 
     if (redirectTarget && res.exitCode === 0) {
-      let existing = appendMode ? (globalVFS.readFile(redirectTarget) ?? '') : '';
+      const activeUser = childEnv['USER'] || this.env['USER'] || 'hello';
+      const resolvedTarget = globalVFS.resolvePath(redirectTarget, activeUser);
+      let existing = appendMode ? (globalVFS.readFile(resolvedTarget, activeUser) ?? '') : '';
       const newContent = existing + res.stdout;
-      globalVFS.writeFile(redirectTarget, newContent);
-      res.stdout = '';
+      const ok = globalVFS.writeFile(resolvedTarget, newContent, activeUser);
+      if (!ok) {
+        res = {
+          stdout: '',
+          stderr: `-bash: ${redirectTarget}: Permission denied\n`,
+          exitCode: 1,
+        };
+      } else {
+        res.stdout = '';
+      }
     }
 
     // Intercept with MAN Agent / AI Auto-Tutor if enabled and execution failed

@@ -4,11 +4,37 @@ import { Command } from '../types';
 export const textCommands: Command[] = [
   {
     name: 'echo',
-    description: 'Display a line of text',
+    description: 'Display a line of text (supports -e, -n)',
     category: 'text',
     execute: (ctx) => {
-      const text = ctx.args.join(' ');
-      return { stdout: text + '\n', stderr: '', exitCode: 0 };
+      let interpretEscapes = false;
+      let noNewline = false;
+      const textParts: string[] = [];
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg === '-e') {
+          interpretEscapes = true;
+        } else if (arg === '-n') {
+          noNewline = true;
+        } else if (arg === '-en' || arg === '-ne') {
+          interpretEscapes = true;
+          noNewline = true;
+        } else {
+          textParts.push(arg);
+        }
+      }
+
+      let text = textParts.join(' ');
+      if (interpretEscapes) {
+        text = text
+          .replace(/\\n/g, '\n')
+          .replace(/\\t/g, '\t')
+          .replace(/\\r/g, '\r')
+          .replace(/\\\\/g, '\\');
+      }
+
+      return { stdout: text + (noNewline ? '' : '\n'), stderr: '', exitCode: 0 };
     },
   },
   {
@@ -875,12 +901,13 @@ export const textCommands: Command[] = [
       const files = ctx.args.filter((a) => !a.startsWith('-'));
       const text = ctx.pipeInput ?? '';
 
+      const activeUser = ctx.env['USER'] || 'hello';
       for (const file of files) {
         if (appendMode) {
-          const existing = ctx.vfs.readFile(file, ctx.env['USER'] || 'hello') ?? '';
-          ctx.vfs.writeFile(file, existing + text);
+          const existing = ctx.vfs.readFile(file, activeUser) ?? '';
+          ctx.vfs.writeFile(file, existing + text, activeUser);
         } else {
-          ctx.vfs.writeFile(file, text);
+          ctx.vfs.writeFile(file, text, activeUser);
         }
       }
 
