@@ -208,7 +208,16 @@ export const userCommands: Command[] = [
         };
       }
 
-      const passwdContent = ctx.vfs.readFile('/etc/passwd') ?? '';
+      const activeUser = ctx.env['USER'] || 'hello';
+      if (activeUser !== 'root') {
+        return {
+          stdout: '',
+          stderr: "useradd: Permission denied.\nuseradd: cannot lock /etc/passwd; try again later.\n",
+          exitCode: 1,
+        };
+      }
+
+      const passwdContent = ctx.vfs.readFile('/etc/passwd', 'root') ?? '';
       if (passwdContent.includes(`${username}:`)) {
         return { stdout: '', stderr: `useradd: user '${username}' already exists\n`, exitCode: 9 };
       }
@@ -229,7 +238,8 @@ export const userCommands: Command[] = [
 
       // Determine primary GID
       let gid = uid;
-      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      let primaryGroupName = username;
+      const groupContent = ctx.vfs.readFile('/etc/group', 'root') ?? '';
       let groupLines = groupContent.split('\n');
 
       if (primaryGroup) {
@@ -239,6 +249,7 @@ export const userCommands: Command[] = [
           const parts = line.split(':');
           if (parts[0] === primaryGroup || (!isNaN(parsedGid) && parseInt(parts[2], 10) === parsedGid)) {
             gid = parseInt(parts[2], 10);
+            primaryGroupName = parts[0];
             found = true;
             break;
           }
@@ -276,21 +287,21 @@ export const userCommands: Command[] = [
         });
       }
 
-      ctx.vfs.writeFile('/etc/group', groupLines.filter(Boolean).join('\n') + '\n');
+      ctx.vfs.writeFile('/etc/group', groupLines.filter(Boolean).join('\n') + '\n', 'root');
 
       const userHome = homeDir || `/home/${username}`;
       const userComment = comment || username;
       const newPasswdLine = `${username}:x:${uid}:${gid}:${userComment}:${userHome}:${shell}\n`;
-      ctx.vfs.writeFile('/etc/passwd', passwdContent + (passwdContent.endsWith('\n') ? '' : '\n') + newPasswdLine);
+      ctx.vfs.writeFile('/etc/passwd', passwdContent + (passwdContent.endsWith('\n') ? '' : '\n') + newPasswdLine, 'root');
 
-      const shadowContent = ctx.vfs.readFile('/etc/shadow') ?? '';
-      ctx.vfs.writeFile('/etc/shadow', shadowContent + (shadowContent.endsWith('\n') ? '' : '\n') + `${username}:${username}:19000:0:99999:7:::\n`);
+      const shadowContent = ctx.vfs.readFile('/etc/shadow', 'root') ?? '';
+      ctx.vfs.writeFile('/etc/shadow', shadowContent + (shadowContent.endsWith('\n') ? '' : '\n') + `${username}:${username}:19000:0:99999:7:::\n`, 'root');
 
       // Create home directory if -m is specified, or default create home when not explicitly disabled by -M
       const shouldCreateHome = explicitCreateHome || (!explicitNoCreateHome && !homeDir);
       if (shouldCreateHome) {
         ctx.vfs.mkdir(userHome, true);
-        ctx.vfs.chown(userHome, `${username}:${primaryGroup || username}`, true);
+        ctx.vfs.chown(userHome, `${username}:${primaryGroupName}`, true);
         ctx.vfs.chmod(userHome, '755');
       }
 
@@ -323,13 +334,18 @@ export const userCommands: Command[] = [
         return { stdout: '', stderr: 'Usage: userdel [options] LOGIN\n\nOptions:\n  -f, --force                   force removal of files, even if not owned by user\n  -r, --remove                  remove home directory and mail spool\n', exitCode: 1 };
       }
 
+      const activeUser = ctx.env['USER'] || 'hello';
+      if (activeUser !== 'root') {
+        return { stdout: '', stderr: "userdel: Permission denied.\nuserdel: cannot lock /etc/passwd; try again later.\n", exitCode: 1 };
+      }
+
       // Check if user is currently logged in
       const currentUser = ctx.env['USER'] || 'root';
       if (username === currentUser && !force) {
         return { stdout: '', stderr: `userdel: user ${username} is currently used by process\n`, exitCode: 8 };
       }
 
-      const passwdContent = ctx.vfs.readFile('/etc/passwd') ?? '';
+      const passwdContent = ctx.vfs.readFile('/etc/passwd', 'root') ?? '';
       const passwdLines = passwdContent.split('\n');
       const userLine = passwdLines.find((l) => l.startsWith(`${username}:`));
 
@@ -342,15 +358,15 @@ export const userCommands: Command[] = [
 
       // Remove from /etc/passwd
       const remainingPasswd = passwdLines.filter((l) => !l.startsWith(`${username}:`));
-      ctx.vfs.writeFile('/etc/passwd', remainingPasswd.join('\n'));
+      ctx.vfs.writeFile('/etc/passwd', remainingPasswd.join('\n'), 'root');
 
       // Remove from /etc/shadow
-      const shadowContent = ctx.vfs.readFile('/etc/shadow') ?? '';
+      const shadowContent = ctx.vfs.readFile('/etc/shadow', 'root') ?? '';
       const remainingShadow = shadowContent.split('\n').filter((l) => !l.startsWith(`${username}:`));
-      ctx.vfs.writeFile('/etc/shadow', remainingShadow.join('\n'));
+      ctx.vfs.writeFile('/etc/shadow', remainingShadow.join('\n'), 'root');
 
       // Remove user from supplementary groups in /etc/group
-      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      const groupContent = ctx.vfs.readFile('/etc/group', 'root') ?? '';
       const remainingGroup = groupContent.split('\n').map((l) => {
         if (!l.trim()) return l;
         const parts = l.split(':');
@@ -365,7 +381,7 @@ export const userCommands: Command[] = [
         const parts = l.split(':');
         return !(parts[0] === username && (!parts[3] || parts[3].trim() === ''));
       });
-      ctx.vfs.writeFile('/etc/group', remainingGroup.join('\n'));
+      ctx.vfs.writeFile('/etc/group', remainingGroup.join('\n'), 'root');
 
       // Remove home directory and mail spool if -r or -f is specified
       if (removeHome || force) {
@@ -459,7 +475,7 @@ export const userCommands: Command[] = [
         return { stdout: '', stderr: 'passwd: You may not view or modify password information for ' + username + '.\n', exitCode: 1 };
       }
 
-      const shadowContent = ctx.vfs.readFile('/etc/shadow') ?? '';
+      const shadowContent = ctx.vfs.readFile('/etc/shadow', 'root') ?? '';
       const lines = shadowContent.split('\n');
 
       if (deletePass) {
@@ -471,7 +487,7 @@ export const userCommands: Command[] = [
           }
           return line;
         });
-        ctx.vfs.writeFile('/etc/shadow', newLines.join('\n'));
+        ctx.vfs.writeFile('/etc/shadow', newLines.join('\n'), 'root');
         return { stdout: `passwd: password expiry information changed.\n`, stderr: '', exitCode: 0 };
       }
 
@@ -484,7 +500,7 @@ export const userCommands: Command[] = [
           }
           return line;
         });
-        ctx.vfs.writeFile('/etc/shadow', newLines.join('\n'));
+        ctx.vfs.writeFile('/etc/shadow', newLines.join('\n'), 'root');
         return { stdout: `passwd: password expiry information changed.\n`, stderr: '', exitCode: 0 };
       }
 
@@ -536,7 +552,12 @@ export const userCommands: Command[] = [
 
       if (!groupname) return { stdout: '', stderr: 'groupadd: missing group name\nUsage: groupadd [options] GROUP\n', exitCode: 1 };
 
-      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      const activeUser = ctx.env['USER'] || 'hello';
+      if (activeUser !== 'root') {
+        return { stdout: '', stderr: "groupadd: Permission denied.\ngroupadd: cannot lock /etc/group; try again later.\n", exitCode: 1 };
+      }
+
+      const groupContent = ctx.vfs.readFile('/etc/group', 'root') ?? '';
       if (groupContent.includes(`${groupname}:`)) {
         return { stdout: '', stderr: `groupadd: group '${groupname}' already exists\n`, exitCode: 9 };
       }
@@ -547,7 +568,7 @@ export const userCommands: Command[] = [
         .filter((g) => !isNaN(g));
       const gid = customGid !== null && !isNaN(customGid) ? customGid : (existingGids.length > 0 ? Math.max(...existingGids, 999) + 1 : 1000);
 
-      ctx.vfs.writeFile('/etc/group', groupContent + (groupContent.endsWith('\n') ? '' : '\n') + `${groupname}:x:${gid}:\n`);
+      ctx.vfs.writeFile('/etc/group', groupContent + (groupContent.endsWith('\n') ? '' : '\n') + `${groupname}:x:${gid}:\n`, 'root');
       return { stdout: '', stderr: '', exitCode: 0 };
     },
   },
@@ -559,13 +580,18 @@ export const userCommands: Command[] = [
       const groupname = ctx.args.find((a) => !a.startsWith('-'));
       if (!groupname) return { stdout: '', stderr: 'groupdel: missing group name\nUsage: groupdel GROUP\n', exitCode: 1 };
 
-      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      const activeUser = ctx.env['USER'] || 'hello';
+      if (activeUser !== 'root') {
+        return { stdout: '', stderr: "groupdel: Permission denied.\ngroupdel: cannot lock /etc/group; try again later.\n", exitCode: 1 };
+      }
+
+      const groupContent = ctx.vfs.readFile('/etc/group', 'root') ?? '';
       if (!groupContent.includes(`${groupname}:`)) {
         return { stdout: '', stderr: `groupdel: group '${groupname}' does not exist\n`, exitCode: 6 };
       }
 
       const lines = groupContent.split('\n').filter((l) => !l.startsWith(`${groupname}:`));
-      ctx.vfs.writeFile('/etc/group', lines.join('\n'));
+      ctx.vfs.writeFile('/etc/group', lines.join('\n'), 'root');
       return { stdout: '', stderr: '', exitCode: 0 };
     },
   },
@@ -867,7 +893,12 @@ export const userCommands: Command[] = [
         };
       }
 
-      const passwdContent = ctx.vfs.readFile('/etc/passwd') ?? '';
+      const activeUser = ctx.env['USER'] || 'hello';
+      if (activeUser !== 'root') {
+        return { stdout: '', stderr: "usermod: Permission denied.\nusermod: cannot lock /etc/passwd; try again later.\n", exitCode: 1 };
+      }
+
+      const passwdContent = ctx.vfs.readFile('/etc/passwd', 'root') ?? '';
       const passwdLines = passwdContent.split('\n');
       const userIndex = passwdLines.findIndex((line) => line.startsWith(`${username}:`));
       if (userIndex === -1) {
@@ -899,7 +930,7 @@ export const userCommands: Command[] = [
 
       // Handle new primary group
       let resolvedPrimaryGid: number | null = null;
-      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      const groupContent = ctx.vfs.readFile('/etc/group', 'root') ?? '';
       let groupLines = groupContent.split('\n');
 
       if (newPrimaryGroup) {
@@ -952,7 +983,7 @@ export const userCommands: Command[] = [
           return parts.join(':');
         });
 
-        ctx.vfs.writeFile('/etc/group', groupLines.join('\n'));
+        ctx.vfs.writeFile('/etc/group', groupLines.join('\n'), 'root');
       }
 
       // Update /etc/passwd fields
@@ -964,11 +995,11 @@ export const userCommands: Command[] = [
       if (newHome) userParts[5] = newHome;
       if (newShell) userParts[6] = newShell;
       passwdLines[userIndex] = userParts.join(':');
-      ctx.vfs.writeFile('/etc/passwd', passwdLines.join('\n'));
+      ctx.vfs.writeFile('/etc/passwd', passwdLines.join('\n'), 'root');
 
       // If username renamed, rename in /etc/group and /etc/shadow
       if (newLogin && newLogin !== username) {
-        const finalGroupContent = ctx.vfs.readFile('/etc/group') ?? '';
+        const finalGroupContent = ctx.vfs.readFile('/etc/group', 'root') ?? '';
         const updatedGroups = finalGroupContent.split('\n').map((l) => {
           const parts = l.split(':');
           if (parts[0] === username) parts[0] = newLogin!;
@@ -977,22 +1008,22 @@ export const userCommands: Command[] = [
           }
           return parts.join(':');
         });
-        ctx.vfs.writeFile('/etc/group', updatedGroups.join('\n'));
+        ctx.vfs.writeFile('/etc/group', updatedGroups.join('\n'), 'root');
 
-        const shadowContent = ctx.vfs.readFile('/etc/shadow') ?? '';
+        const shadowContent = ctx.vfs.readFile('/etc/shadow', 'root') ?? '';
         const updatedShadow = shadowContent.split('\n').map((l) => {
           if (l.startsWith(`${username}:`)) {
             return `${newLogin}:${l.slice(username!.length + 1)}`;
           }
           return l;
         });
-        ctx.vfs.writeFile('/etc/shadow', updatedShadow.join('\n'));
+        ctx.vfs.writeFile('/etc/shadow', updatedShadow.join('\n'), 'root');
       }
 
       // Lock / unlock account
       if (lockAccount || unlockAccount) {
         const currentTarget = newLogin || username;
-        const shadowContent = ctx.vfs.readFile('/etc/shadow') ?? '';
+        const shadowContent = ctx.vfs.readFile('/etc/shadow', 'root') ?? '';
         const updatedShadow = shadowContent.split('\n').map((l) => {
           if (l.startsWith(`${currentTarget}:`)) {
             const parts = l.split(':');
@@ -1005,7 +1036,7 @@ export const userCommands: Command[] = [
           }
           return l;
         });
-        ctx.vfs.writeFile('/etc/shadow', updatedShadow.join('\n'));
+        ctx.vfs.writeFile('/etc/shadow', updatedShadow.join('\n'), 'root');
       }
 
       // Move home directory if requested (-m)
@@ -1085,7 +1116,12 @@ export const userCommands: Command[] = [
         };
       }
 
-      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      const activeUser = ctx.env['USER'] || 'hello';
+      if (activeUser !== 'root') {
+        return { stdout: '', stderr: "groupmod: Permission denied.\ngroupmod: cannot lock /etc/group; try again later.\n", exitCode: 1 };
+      }
+
+      const groupContent = ctx.vfs.readFile('/etc/group', 'root') ?? '';
       const lines = groupContent.split('\n');
       const groupIndex = lines.findIndex((l) => l.startsWith(`${groupname}:`));
 
@@ -1105,7 +1141,7 @@ export const userCommands: Command[] = [
         parts[0] = newName;
       }
       lines[groupIndex] = parts.join(':');
-      ctx.vfs.writeFile('/etc/group', lines.join('\n'));
+      ctx.vfs.writeFile('/etc/group', lines.join('\n'), 'root');
 
       return { stdout: '', stderr: '', exitCode: 0 };
     },
@@ -1151,7 +1187,12 @@ export const userCommands: Command[] = [
         };
       }
 
-      const groupContent = ctx.vfs.readFile('/etc/group') ?? '';
+      const activeUser = ctx.env['USER'] || 'hello';
+      if (activeUser !== 'root') {
+        return { stdout: '', stderr: "gpasswd: Permission denied.\ngpasswd: cannot lock /etc/group; try again later.\n", exitCode: 1 };
+      }
+
+      const groupContent = ctx.vfs.readFile('/etc/group', 'root') ?? '';
       const lines = groupContent.split('\n');
       const groupIndex = lines.findIndex((l) => l.startsWith(`${groupname}:`));
 
@@ -1163,7 +1204,7 @@ export const userCommands: Command[] = [
       let currentMembers = (parts[3] || '').split(',').map((m) => m.trim()).filter(Boolean);
 
       if (addUser) {
-        const passwdContent = ctx.vfs.readFile('/etc/passwd') ?? '';
+        const passwdContent = ctx.vfs.readFile('/etc/passwd', 'root') ?? '';
         if (addUser !== 'root' && !passwdContent.includes(`${addUser}:`)) {
           return { stdout: '', stderr: `gpasswd: user '${addUser}' does not exist\n`, exitCode: 1 };
         }
@@ -1172,7 +1213,7 @@ export const userCommands: Command[] = [
         }
         parts[3] = currentMembers.join(',');
         lines[groupIndex] = parts.join(':');
-        ctx.vfs.writeFile('/etc/group', lines.join('\n'));
+        ctx.vfs.writeFile('/etc/group', lines.join('\n'), 'root');
         return { stdout: `Adding user ${addUser} to group ${groupname}\n`, stderr: '', exitCode: 0 };
       }
 
@@ -1183,7 +1224,7 @@ export const userCommands: Command[] = [
         currentMembers = currentMembers.filter((m) => m !== delUser);
         parts[3] = currentMembers.join(',');
         lines[groupIndex] = parts.join(':');
-        ctx.vfs.writeFile('/etc/group', lines.join('\n'));
+        ctx.vfs.writeFile('/etc/group', lines.join('\n'), 'root');
         return { stdout: `Removing user ${delUser} from group ${groupname}\n`, stderr: '', exitCode: 0 };
       }
 
@@ -1191,14 +1232,14 @@ export const userCommands: Command[] = [
         const newMembers = membersList.split(',').map((m) => m.trim()).filter(Boolean);
         parts[3] = newMembers.join(',');
         lines[groupIndex] = parts.join(':');
-        ctx.vfs.writeFile('/etc/group', lines.join('\n'));
+        ctx.vfs.writeFile('/etc/group', lines.join('\n'), 'root');
         return { stdout: '', stderr: '', exitCode: 0 };
       }
 
       if (removePassword) {
         parts[1] = 'x';
         lines[groupIndex] = parts.join(':');
-        ctx.vfs.writeFile('/etc/group', lines.join('\n'));
+        ctx.vfs.writeFile('/etc/group', lines.join('\n'), 'root');
         return { stdout: '', stderr: '', exitCode: 0 };
       }
 

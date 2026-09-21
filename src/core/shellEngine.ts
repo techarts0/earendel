@@ -255,7 +255,7 @@ export class ShellEngine {
       return lastResult;
     }
 
-    const res = await this.executeSingleCommand(expanded, '');
+    const res = await this.executeSingleCommand(expanded, undefined);
     this.env['?'] = res.exitCode.toString();
     return res;
   }
@@ -432,7 +432,7 @@ export class ShellEngine {
     return Boolean(clean);
   }
 
-  private async executeSingleCommand(cmdStr: string, pipeInput: string = ''): Promise<ExecutionResult> {
+  private async executeSingleCommand(cmdStr: string, pipeInput: string | undefined = undefined): Promise<ExecutionResult> {
     let rawCmd = cmdStr.trim();
     let redirectTarget: string | null = null;
     let appendMode = false;
@@ -485,7 +485,8 @@ export class ShellEngine {
     if (cmdIdx >= args.length) return { stdout: '', stderr: '', exitCode: 0 };
 
     const cmdName = args[cmdIdx];
-    const cmdArgs = args.slice(cmdIdx + 1);
+    const rawCmdArgs = args.slice(cmdIdx + 1);
+    const cmdArgs = this.expandGlobs(rawCmdArgs);
 
     let res: ExecutionResult = { stdout: '', stderr: '', exitCode: 0 };
 
@@ -706,6 +707,88 @@ export class ShellEngine {
     }
 
     return args;
+  }
+
+  private expandGlobs(args: string[]): string[] {
+    const result: string[] = [];
+    const globRegex = /[*?[\]]/;
+
+    for (const arg of args) {
+      if (!globRegex.test(arg)) {
+        result.push(arg);
+        continue;
+      }
+
+      // Handle path with directory components e.g. /etc/*.conf, ./*.txt, *.log
+      let dirPath = '.';
+      let pattern = arg;
+      const lastSlash = arg.lastIndexOf('/');
+      if (lastSlash !== -1) {
+        dirPath = arg.substring(0, lastSlash) || '/';
+        pattern = arg.substring(lastSlash + 1);
+      }
+
+      const dirNode = this.vfs.getNodeByPath(dirPath, this.env['USER'] || 'hello');
+      if (!dirNode || !dirNode.children) {
+        result.push(arg);
+        continue;
+      }
+
+      // Convert glob pattern to regular expression
+      // * -> [^/]*, ? -> [^/], [...] -> [...]
+      let regexStr = '^';
+      for (let i = 0; i < pattern.length; i++) {
+        const c = pattern[i];
+        if (c === '*') {
+          regexStr += '.*';
+        } else if (c === '?') {
+          regexStr += '.';
+        } else if (c === '[') {
+          let j = i + 1;
+          while (j < pattern.length && pattern[j] !== ']') j++;
+          if (j < pattern.length) {
+            regexStr += pattern.substring(i, j + 1);
+            i = j;
+          } else {
+            regexStr += '\\[';
+          }
+        } else if (/[.+^${}()|[\]\\]/.test(c)) {
+          regexStr += '\\' + c;
+        } else {
+          regexStr += c;
+        }
+      }
+      regexStr += '$';
+
+      const regex = new RegExp(regexStr);
+      const matchedNames: string[] = [];
+
+      for (const name of dirNode.children.keys()) {
+        // Files starting with . are only matched if pattern starts with .
+        if (name.startsWith('.') && !pattern.startsWith('.')) continue;
+        if (regex.test(name)) {
+          matchedNames.push(name);
+        }
+      }
+
+      matchedNames.sort();
+
+      if (matchedNames.length > 0) {
+        for (const name of matchedNames) {
+          if (lastSlash !== -1) {
+            const prefix = dirPath === '/' ? '/' : `${dirPath}/`;
+            result.push(`${prefix}${name}`);
+          } else {
+            result.push(name);
+          }
+        }
+      } else {
+        // POSIX default: if no match, preserve literal string
+        result.push(arg);
+      }
+    }
+
+    return result;
   }
 }
 

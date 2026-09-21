@@ -360,7 +360,17 @@ export const fileCommands: Command[] = [
         if (ctx.pipeInput !== undefined) {
           rawInputs.push(ctx.pipeInput);
         } else {
-          return { stdout: '', stderr: '', exitCode: 0 };
+          return {
+            stdout: '',
+            stderr: '',
+            exitCode: 0,
+            interactiveInput: {
+              command: 'cat',
+              targetFiles: [],
+              appendMode: false,
+              collectedLines: [],
+            },
+          };
         }
       } else {
         let stderr = '';
@@ -436,23 +446,6 @@ export const fileCommands: Command[] = [
       const res = outputLines.join('\n');
       return { stdout: res.endsWith('\n') ? res : res + '\n', stderr: '', exitCode: 0 };
     },
-    executeStream: async function* (ctx, inputStream) {
-      if (inputStream) {
-        for await (const chunk of inputStream) {
-          yield chunk;
-        }
-      }
-      const { positional } = parseFlags(ctx.args);
-      for (const arg of positional) {
-        const content = ctx.vfs.readFile(arg, ctx.env['USER'] || 'hello');
-        if (content !== null) {
-          const lines = content.split('\n');
-          for (let i = 0; i < lines.length; i++) {
-            yield lines[i] + (i < lines.length - 1 ? '\n' : '');
-          }
-        }
-      }
-    },
   },
   {
     name: 'chmod',
@@ -524,26 +517,35 @@ export const fileCommands: Command[] = [
     description: 'Output the first part of files',
     category: 'file',
     execute: (ctx) => {
-      const { flags, positional } = parseFlags(ctx.args);
       let numLines = 10;
       let numBytes: number | null = null;
-      const quiet = flags.has('q') || flags.has('quiet') || flags.has('silent');
-      const verbose = flags.has('v') || flags.has('verbose');
+      let quiet = false;
+      let verbose = false;
+      const files: string[] = [];
 
       for (let i = 0; i < ctx.args.length; i++) {
         const arg = ctx.args[i];
-        if (arg.startsWith('-n')) {
-          const val = arg === '-n' ? ctx.args[i + 1] : arg.slice(2);
-          if (val) numLines = parseInt(val, 10) || 10;
+        if (arg === '-n' && ctx.args[i + 1]) {
+          numLines = parseInt(ctx.args[i + 1], 10) || 10;
+          i++;
+        } else if (arg.startsWith('-n')) {
+          numLines = parseInt(arg.slice(2), 10) || 10;
         } else if (/^-\d+$/.test(arg)) {
           numLines = parseInt(arg.slice(1), 10) || 10;
+        } else if (arg === '-c' && ctx.args[i + 1]) {
+          numBytes = parseInt(ctx.args[i + 1], 10);
+          i++;
         } else if (arg.startsWith('-c')) {
-          const val = arg === '-c' ? ctx.args[i + 1] : arg.slice(2);
-          if (val) numBytes = parseInt(val, 10);
+          numBytes = parseInt(arg.slice(2), 10);
+        } else if (arg === '-q' || arg === '--quiet' || arg === '--silent') {
+          quiet = true;
+        } else if (arg === '-v' || arg === '--verbose') {
+          verbose = true;
+        } else if (!arg.startsWith('-')) {
+          files.push(arg);
         }
       }
 
-      const files = positional;
       if (files.length === 0 || (files.length === 1 && files[0] === '-')) {
         const text = ctx.pipeInput ?? '';
         if (numBytes !== null) {
@@ -582,64 +584,54 @@ export const fileCommands: Command[] = [
 
       return { stdout, stderr, exitCode };
     },
-    executeStream: async function* (ctx, inputStream) {
-      let n = 10;
-      const nIdx = ctx.args.indexOf('-n');
-      if (nIdx !== -1 && ctx.args[nIdx + 1]) {
-        n = parseInt(ctx.args[nIdx + 1], 10) || 10;
-      }
-      let count = 0;
-      if (inputStream) {
-        for await (const chunk of inputStream) {
-          for (const line of chunk.split('\n')) {
-            if (count < n) {
-              yield line + '\n';
-              count++;
-              if (count >= n) return;
-            }
-          }
-        }
-      } else if (ctx.args[0]) {
-        const text = ctx.vfs.readFile(ctx.args[0], ctx.env['USER'] || 'hello') ?? '';
-        for (const line of text.split('\n').slice(0, n)) {
-          yield line + '\n';
-        }
-      }
-    },
   },
   {
     name: 'tail',
     description: 'Output the last part of files',
     category: 'file',
     execute: (ctx) => {
-      const { flags, positional } = parseFlags(ctx.args);
       let numLines = 10;
       let fromStart = false;
       let numBytes: number | null = null;
-      const quiet = flags.has('q') || flags.has('quiet') || flags.has('silent');
-      const verbose = flags.has('v') || flags.has('verbose');
+      let quiet = false;
+      let verbose = false;
+      const files: string[] = [];
 
       for (let i = 0; i < ctx.args.length; i++) {
         const arg = ctx.args[i];
-        if (arg.startsWith('-n')) {
-          const val = arg === '-n' ? ctx.args[i + 1] : arg.slice(2);
-          if (val) {
-            if (val.startsWith('+')) {
-              fromStart = true;
-              numLines = parseInt(val.slice(1), 10) || 1;
-            } else {
-              numLines = parseInt(val, 10) || 10;
-            }
+        if (arg === '-n' && ctx.args[i + 1]) {
+          const val = ctx.args[i + 1];
+          if (val.startsWith('+')) {
+            fromStart = true;
+            numLines = parseInt(val.slice(1), 10) || 1;
+          } else {
+            numLines = parseInt(val, 10) || 10;
+          }
+          i++;
+        } else if (arg.startsWith('-n')) {
+          const val = arg.slice(2);
+          if (val.startsWith('+')) {
+            fromStart = true;
+            numLines = parseInt(val.slice(1), 10) || 1;
+          } else {
+            numLines = parseInt(val, 10) || 10;
           }
         } else if (/^-\d+$/.test(arg)) {
           numLines = parseInt(arg.slice(1), 10) || 10;
+        } else if (arg === '-c' && ctx.args[i + 1]) {
+          numBytes = parseInt(ctx.args[i + 1], 10);
+          i++;
         } else if (arg.startsWith('-c')) {
-          const val = arg === '-c' ? ctx.args[i + 1] : arg.slice(2);
-          if (val) numBytes = parseInt(val, 10);
+          numBytes = parseInt(arg.slice(2), 10);
+        } else if (arg === '-q' || arg === '--quiet' || arg === '--silent') {
+          quiet = true;
+        } else if (arg === '-v' || arg === '--verbose') {
+          verbose = true;
+        } else if (!arg.startsWith('-')) {
+          files.push(arg);
         }
       }
 
-      const files = positional;
       if (files.length === 0 || (files.length === 1 && files[0] === '-')) {
         const text = ctx.pipeInput ?? '';
         if (numBytes !== null) {
@@ -1198,6 +1190,105 @@ Change: ${dateStr} +0800
       }
       parts.pop();
       return { stdout: (pathStr.startsWith('/') ? '/' : '') + parts.join('/') + '\n', stderr: '', exitCode: 0 };
+    },
+  },
+  {
+    name: 'more',
+    description: 'File perusal filter for crt viewing (+<line>, -<num>, -d, -s)',
+    category: 'file',
+    execute: (ctx) => {
+      let startLine = 1;
+      let pageSize = 20;
+      const files: string[] = [];
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg.startsWith('+') && /^\+\d+$/.test(arg)) {
+          startLine = parseInt(arg.slice(1), 10) || 1;
+        } else if (/^-\d+$/.test(arg)) {
+          pageSize = parseInt(arg.slice(1), 10) || 20;
+        } else if (!arg.startsWith('-')) {
+          files.push(arg);
+        }
+      }
+
+      let content = '';
+      if (files.length === 0 || (files.length === 1 && files[0] === '-')) {
+        content = ctx.pipeInput ?? '';
+      } else {
+        const activeUser = ctx.env['USER'] || 'hello';
+        for (const file of files) {
+          const text = ctx.vfs.readFile(file, activeUser);
+          if (text === null) {
+            return { stdout: '', stderr: `more: cannot open '${file}': No such file or directory\n`, exitCode: 1 };
+          }
+          content += (content ? '\n' : '') + text;
+        }
+      }
+
+      const allLines = content.split('\n');
+      if (allLines.length <= pageSize) {
+        return { stdout: allLines.slice(startLine - 1).join('\n') + (content ? '\n' : ''), stderr: '', exitCode: 0 };
+      }
+
+      return {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        interactiveInput: {
+          command: 'more',
+          targetFiles: [startLine.toString(), pageSize.toString(), files[0] || 'stdin'],
+          appendMode: false,
+          collectedLines: allLines,
+        },
+      };
+    },
+  },
+  {
+    name: 'less',
+    description: 'Opposite of more - interactive file viewer (-N, -S, -i)',
+    category: 'file',
+    execute: (ctx) => {
+      let showLineNumbers = false;
+      const files: string[] = [];
+
+      for (let i = 0; i < ctx.args.length; i++) {
+        const arg = ctx.args[i];
+        if (arg === '-N' || arg === '--LINE-NUMBERS') {
+          showLineNumbers = true;
+        } else if (arg.startsWith('-') && arg.includes('N')) {
+          showLineNumbers = true;
+        } else if (!arg.startsWith('-')) {
+          files.push(arg);
+        }
+      }
+
+      let content = '';
+      if (files.length === 0 || (files.length === 1 && files[0] === '-')) {
+        content = ctx.pipeInput ?? '';
+      } else {
+        const activeUser = ctx.env['USER'] || 'hello';
+        for (const file of files) {
+          const text = ctx.vfs.readFile(file, activeUser);
+          if (text === null) {
+            return { stdout: '', stderr: `less: ${file}: No such file or directory\n`, exitCode: 1 };
+          }
+          content += (content ? '\n' : '') + text;
+        }
+      }
+
+      const allLines = content.split('\n');
+      return {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        interactiveInput: {
+          command: 'less',
+          targetFiles: [showLineNumbers ? '1' : '0', files[0] || 'stdin', '0'], // flags: showLineNum, filename, scrollOffset
+          appendMode: false,
+          collectedLines: allLines,
+        },
+      };
     },
   },
 ];

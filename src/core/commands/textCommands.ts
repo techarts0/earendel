@@ -226,44 +226,6 @@ export const textCommands: Command[] = [
         exitCode: totalMatches > 0 ? 0 : hadError ? 2 : 1,
       };
     },
-    executeStream: async function* (ctx, inputStream) {
-      const ignoreCase = ctx.args.includes('-i') || ctx.args.includes('--ignore-case');
-      const invert = ctx.args.includes('-v') || ctx.args.includes('--invert-match');
-      const showLineNum = ctx.args.includes('-n') || ctx.args.includes('--line-number');
-      const nonFlags = ctx.args.filter((a) => !a.startsWith('-'));
-      if (nonFlags.length === 0) return;
-
-      const patternStr = nonFlags[0];
-      const filePath = nonFlags[1];
-      const regex = new RegExp(patternStr, ignoreCase ? 'i' : '');
-
-      let lineCount = 0;
-      const processLine = (line: string): string | null => {
-        lineCount++;
-        const matches = regex.test(line);
-        if (invert ? !matches : matches) {
-          const prefix = showLineNum ? `${lineCount}:` : '';
-          return prefix + line + (line.endsWith('\n') ? '' : '\n');
-        }
-        return null;
-      };
-
-      if (inputStream) {
-        for await (const chunk of inputStream) {
-          const lines = chunk.split('\n');
-          for (let i = 0; i < lines.length; i++) {
-            const res = processLine(lines[i]);
-            if (res !== null) yield res;
-          }
-        }
-      } else if (filePath) {
-        const text = ctx.vfs.readFile(filePath, ctx.env['USER'] || 'hello') ?? '';
-        for (const line of text.split('\n')) {
-          const res = processLine(line);
-          if (res !== null) yield res;
-        }
-      }
-    },
   },
   {
     name: 'sed',
@@ -336,27 +298,51 @@ export const textCommands: Command[] = [
           let explicitlyPrinted = false;
 
           for (const cmd of commands) {
-            // Substitute: s/pattern/replacement/flags
-            const sMatch = cmd.match(/^s([^\w\s])(.+?)\1(.*?)\1([giIpP]*)$/);
-            if (sMatch) {
-              const delim = sMatch[1];
-              const findStr = sMatch[2];
-              const replaceStr = sMatch[3];
-              const cmdFlags = sMatch[4];
-              const isGlobal = cmdFlags.includes('g');
-              const isCaseInsensitive = cmdFlags.includes('i') || cmdFlags.includes('I');
-              const printOnMatch = cmdFlags.includes('p') || cmdFlags.includes('P');
-
-              try {
-                const regex = new RegExp(findStr, (isGlobal ? 'g' : '') + (isCaseInsensitive ? 'i' : ''));
-                if (regex.test(line)) {
-                  line = line.replace(regex, replaceStr);
-                  if (printOnMatch) explicitlyPrinted = true;
+            // Substitute: s/pattern/replacement/flags (handling escaped delimiters like \/)
+            const delimChar = cmd[1];
+            if (cmd.startsWith('s') && delimChar && !/[\w\s]/.test(delimChar)) {
+              let i = 2;
+              let pattern = '';
+              while (i < cmd.length && cmd[i] !== delimChar) {
+                if (cmd[i] === '\\' && i + 1 < cmd.length) {
+                  pattern += cmd[i] + cmd[i + 1];
+                  i += 2;
+                } else {
+                  pattern += cmd[i];
+                  i++;
                 }
-              } catch (err) {
-                // Invalid regex, ignore or keep line
               }
-              continue;
+              if (i < cmd.length && cmd[i] === delimChar) {
+                i++;
+                let replacement = '';
+                while (i < cmd.length && cmd[i] !== delimChar) {
+                  if (cmd[i] === '\\' && i + 1 < cmd.length) {
+                    replacement += cmd[i] + cmd[i + 1];
+                    i += 2;
+                  } else {
+                    replacement += cmd[i];
+                    i++;
+                  }
+                }
+                const flagsPart = i < cmd.length && cmd[i] === delimChar ? cmd.slice(i + 1) : '';
+                
+                // Convert backreferences \1, \2 -> $1, $2 for JavaScript regex replacement
+                const jsReplacement = replacement.replace(/\\(\d)/g, '$$$1');
+                const isGlobal = flagsPart.includes('g');
+                const isCaseInsensitive = flagsPart.includes('i') || flagsPart.includes('I');
+                const printOnMatch = flagsPart.includes('p') || flagsPart.includes('P');
+
+                try {
+                  const regex = new RegExp(pattern, (isGlobal ? 'g' : '') + (isCaseInsensitive ? 'i' : ''));
+                  if (regex.test(line)) {
+                    line = line.replace(regex, jsReplacement);
+                    if (printOnMatch) explicitlyPrinted = true;
+                  }
+                } catch (err) {
+                  // Invalid regex, keep line
+                }
+                continue;
+              }
             }
 
             // Line delete: <number>d or <start>,<end>d or /pattern/d
@@ -579,12 +565,44 @@ export const textCommands: Command[] = [
               if (condition.startsWith('/') && condition.endsWith('/')) {
                 const pat = condition.slice(1, -1);
                 shouldRun = new RegExp(pat).test(line);
-              } else if (condition.includes('==')) {
-                const [left, right] = condition.split('==').map((s) => s.trim().replace(/^["']|["']$/g, ''));
-                if (left.startsWith('$')) {
-                  const idx = parseInt(left.slice(1), 10);
+              } else {
+                // Check operators: >=, <=, !=, ==, >, <, ~
+                const opMatch = condition.match(/^(\$\d+|\w+)\s*(>=|<=|!=|==|>|<|~)\s*(.+)$/);
+                if (opMatch) {
+                  const [, leftPart, op, rightPart] = opMatch;
+                  let leftVal: string | number = '';
                   const fields = line.trim().split(new RegExp(delimiter));
-                  shouldRun = (fields[idx - 1] ?? '') === right;
+                  if (leftPart.startsWith('$')) {
+                    const idx = parseInt(leftPart.slice(1), 10);
+                    leftVal = fields[idx - 1] ?? '';
+                  } else if (leftPart === 'NR') {
+                    leftVal = lineNum;
+                  } else if (leftPart === 'NF') {
+                    leftVal = fields.length;
+                  } else {
+                    leftVal = variables[leftPart] ?? leftPart;
+                  }
+
+                  let rightVal: string | number = rightPart.trim().replace(/^["']|["']$/g, '');
+                  if (op === '~') {
+                    const regexClean = rightVal.replace(/^\/|\/$/g, '');
+                    shouldRun = new RegExp(regexClean).test(String(leftVal));
+                  } else {
+                    // Try numeric comparison if both sides are numeric
+                    const numLeft = Number(leftVal);
+                    const numRight = Number(rightVal);
+                    const isNumeric = !isNaN(numLeft) && !isNaN(numRight) && String(leftVal).trim() !== '' && String(rightVal).trim() !== '';
+
+                    const cmpLeft = isNumeric ? numLeft : String(leftVal);
+                    const cmpRight = isNumeric ? numRight : String(rightVal);
+
+                    if (op === '>=') shouldRun = cmpLeft >= cmpRight;
+                    else if (op === '<=') shouldRun = cmpLeft <= cmpRight;
+                    else if (op === '>') shouldRun = cmpLeft > cmpRight;
+                    else if (op === '<') shouldRun = cmpLeft < cmpRight;
+                    else if (op === '==') shouldRun = cmpLeft == cmpRight;
+                    else if (op === '!=') shouldRun = cmpLeft != cmpRight;
+                  }
                 }
               }
             }
@@ -899,8 +917,23 @@ export const textCommands: Command[] = [
     execute: (ctx) => {
       const appendMode = ctx.args.includes('-a') || ctx.args.includes('--append');
       const files = ctx.args.filter((a) => !a.startsWith('-'));
-      const text = ctx.pipeInput ?? '';
 
+      // If called without pipe input (interactive TTY stdin mode)
+      if (ctx.pipeInput === undefined) {
+        return {
+          stdout: '',
+          stderr: '',
+          exitCode: 0,
+          interactiveInput: {
+            command: 'tee',
+            targetFiles: files,
+            appendMode,
+            collectedLines: [],
+          },
+        };
+      }
+
+      const text = ctx.pipeInput;
       const activeUser = ctx.env['USER'] || 'hello';
       for (const file of files) {
         if (appendMode) {

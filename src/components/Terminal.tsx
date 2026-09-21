@@ -34,6 +34,12 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
   const isInitialBootLoginRef = useRef<boolean>(true);
   const pendingSudoCmdRef = useRef<{ username: string; commandLine: string } | null>(null);
   const pendingPasswdRef = useRef<{ username: string; step: 'current' | 'new' | 'confirm'; newPass?: string } | null>(null);
+  const pendingInteractiveInputRef = useRef<{
+    command: string;
+    targetFiles: string[];
+    appendMode: boolean;
+    collectedLines: string[];
+  } | null>(null);
   const historyIndexRef = useRef<number>(-1);
 
   const promptStr = () => {
@@ -145,12 +151,95 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
         return;
       }
 
+      // Handle interactive pagers: more and less
+      if (pendingInteractiveInputRef.current) {
+        const session = pendingInteractiveInputRef.current;
+        if (session.command === 'more' || session.command === 'less') {
+          const lines = session.collectedLines;
+          const isLess = session.command === 'less';
+          const pageSize = isLess ? 22 : parseInt(session.targetFiles[1] || '20', 10);
+          const showLineNum = isLess && session.targetFiles[0] === '1';
+          let offset = parseInt(session.targetFiles[2] || '0', 10);
+
+          const renderPage = (newOffset: number) => {
+            offset = Math.max(0, Math.min(newOffset, Math.max(0, lines.length - pageSize)));
+            session.targetFiles[2] = offset.toString();
+            term.clear();
+            const slice = lines.slice(offset, offset + pageSize);
+            slice.forEach((l, i) => {
+              const numPrefix = showLineNum ? `\x1b[33m${String(offset + i + 1).padStart(6, ' ')} \x1b[0m` : '';
+              term.writeln(`${numPrefix}${l}`);
+            });
+            const percent = Math.min(100, Math.round(((offset + pageSize) / lines.length) * 100));
+            if (isLess) {
+              term.write(`\x1b[7m:${offset + 1}-${Math.min(lines.length, offset + pageSize)}/${lines.length} (${percent}%) (press q to quit)\x1b[0m`);
+            } else {
+              term.write(`\x1b[7m--More--(${percent}%) [Space: Next page, Enter: Next line, q: Quit]\x1b[0m`);
+            }
+          };
+
+          if (key === 'q' || key === 'Q') {
+            pendingInteractiveInputRef.current = null;
+            term.clear();
+            term.write(promptStr());
+            return;
+          }
+
+          if (key === ' ' || key === '\x1b[6~') { // Space or PageDown
+            if (offset + pageSize >= lines.length && !isLess) {
+              pendingInteractiveInputRef.current = null;
+              term.clear();
+              term.write(promptStr());
+              return;
+            }
+            renderPage(offset + pageSize);
+            return;
+          }
+
+          if (key === 'b' || key === 'B' || key === '\x1b[5~') { // b or PageUp
+            renderPage(offset - pageSize);
+            return;
+          }
+
+          if (key === '\r' || key === '\n' || key === '\x1b[B') { // Enter or Down Arrow
+            renderPage(offset + 1);
+            return;
+          }
+
+          if (key === '\x1b[A') { // Up Arrow
+            renderPage(offset - 1);
+            return;
+          }
+
+          if (key === 'g') { // First line
+            renderPage(0);
+            return;
+          }
+
+          if (key === 'G') { // Last line
+            renderPage(lines.length - pageSize);
+            return;
+          }
+
+          return;
+        }
+      }
+
       if (key === '\r' || key === '\n') {
         globalSoundEngine.playEnterSound();
         historyIndexRef.current = -1;
         term.writeln('');
-        const cmd = inputBufferRef.current.trim();
+        const lineRaw = inputBufferRef.current;
+        const cmd = lineRaw.trim();
         inputBufferRef.current = '';
+
+        // Handle active interactive stdin input (e.g. tee, cat)
+        if (pendingInteractiveInputRef.current) {
+          pendingInteractiveInputRef.current.collectedLines.push(lineRaw);
+          // Echo stdout to terminal (like authentic tee/cat in Linux)
+          term.writeln(lineRaw);
+          return;
+        }
 
         // Initial boot login step 1: enter username
         if (isInitialBootLoginRef.current && !pendingLoginUserRef.current) {
@@ -405,6 +494,32 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
               }
               return;
             }
+
+            if (res.interactiveInput) {
+              pendingInteractiveInputRef.current = res.interactiveInput;
+              inputBufferRef.current = '';
+              const session = res.interactiveInput;
+              if (session.command === 'more' || session.command === 'less') {
+                const lines = session.collectedLines;
+                const isLess = session.command === 'less';
+                const pageSize = isLess ? 22 : parseInt(session.targetFiles[1] || '20', 10);
+                const showLineNum = isLess && session.targetFiles[0] === '1';
+                const offset = parseInt(session.targetFiles[2] || '0', 10);
+                term.clear();
+                const slice = lines.slice(offset, offset + pageSize);
+                slice.forEach((l, i) => {
+                  const numPrefix = showLineNum ? `\x1b[33m${String(offset + i + 1).padStart(6, ' ')} \x1b[0m` : '';
+                  term.writeln(`${numPrefix}${l}`);
+                });
+                const percent = Math.min(100, Math.round(((offset + pageSize) / lines.length) * 100));
+                if (isLess) {
+                  term.write(`\x1b[7m:${offset + 1}-${Math.min(lines.length, offset + pageSize)}/${lines.length} (${percent}%) (press q to quit)\x1b[0m`);
+                } else {
+                  term.write(`\x1b[7m--More--(${percent}%) [Space: Next page, Enter: Next line, q: Quit]\x1b[0m`);
+                }
+              }
+              return;
+            }
           }
         }
 
@@ -417,11 +532,37 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
             term.write('\b \b');
           }
         }
+      } else if (key === '\x04') {
+        // Ctrl+D (EOF signal)
+        if (pendingInteractiveInputRef.current) {
+          const session = pendingInteractiveInputRef.current;
+          pendingInteractiveInputRef.current = null;
+          inputBufferRef.current = '';
+          term.writeln('');
+
+          const content = session.collectedLines.length > 0 ? session.collectedLines.join('\n') + '\n' : '';
+          const activeUser = shellEngineRef.current.getEnv('USER') || 'hello';
+
+          for (const targetFile of session.targetFiles) {
+            if (session.appendMode) {
+              const existing = globalVFS.readFile(targetFile, activeUser) ?? '';
+              globalVFS.writeFile(targetFile, existing + content, activeUser);
+            } else {
+              globalVFS.writeFile(targetFile, content, activeUser);
+            }
+          }
+
+          term.write(promptStr());
+          return;
+        }
       } else if (key === '\x03') {
         inputBufferRef.current = '';
         pendingLoginUserRef.current = null;
         pendingSudoCmdRef.current = null;
         pendingPasswdRef.current = null;
+        if (pendingInteractiveInputRef.current) {
+          pendingInteractiveInputRef.current = null;
+        }
         term.writeln('^C');
         if (isInitialBootLoginRef.current) {
           term.write('earendel login: ');

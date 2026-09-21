@@ -25,6 +25,12 @@ export interface ExecutionResult {
   loginPrompt?: { username: string };
   sudoPrompt?: { username: string; commandLine: string };
   passwdPrompt?: { username: string; step: 'current' | 'new' | 'confirm'; newPass?: string };
+  interactiveInput?: {
+    command: string;
+    targetFiles: string[];
+    appendMode: boolean;
+    collectedLines: string[];
+  };
   toggleFullscreen?: 'max' | 'restore';
   logout?: boolean;
   poweroff?: boolean;
