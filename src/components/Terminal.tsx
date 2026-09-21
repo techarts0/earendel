@@ -39,6 +39,9 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
     targetFiles: string[];
     appendMode: boolean;
     collectedLines: string[];
+    delimiter?: string;
+    pipelineNext?: string;
+    redirectTarget?: string;
   } | null>(null);
   const historyIndexRef = useRef<number>(-1);
 
@@ -233,11 +236,50 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
         const cmd = lineRaw.trim();
         inputBufferRef.current = '';
 
-        // Handle active interactive stdin input (e.g. tee, cat)
+        // Handle active interactive stdin input (e.g. heredoc << EOF, tee, cat)
         if (pendingInteractiveInputRef.current) {
-          pendingInteractiveInputRef.current.collectedLines.push(lineRaw);
-          // Echo stdout to terminal (like authentic tee/cat in Linux)
-          term.writeln(lineRaw);
+          const session = pendingInteractiveInputRef.current;
+          if (session.delimiter && lineRaw.trim() === session.delimiter) {
+            // Delimiter reached! Complete heredoc
+            pendingInteractiveInputRef.current = null;
+            const content = session.collectedLines.length > 0 ? session.collectedLines.join('\n') + '\n' : '';
+            const activeUser = shellEngineRef.current.getEnv('USER') || 'hello';
+
+            if (session.pipelineNext) {
+              // Pipe content to next command in pipeline (e.g. sudo tee /var/log/nginx/access.log)
+              const res = await shellEngineRef.current.execute(session.pipelineNext, [], content);
+              if (res.stdout) {
+                term.write(res.stdout.replace(/\n/g, '\r\n'));
+              }
+              if (res.stderr) {
+                term.write(`\x1b[31m${res.stderr.replace(/\n/g, '\r\n')}\x1b[0m`);
+              }
+            } else if (session.targetFiles.length > 0) {
+              for (const targetFile of session.targetFiles) {
+                const resolvedTarget = globalVFS.resolvePath(targetFile, activeUser);
+                if (session.appendMode) {
+                  const existing = globalVFS.readFile(resolvedTarget, activeUser) ?? '';
+                  globalVFS.writeFile(resolvedTarget, existing + content, activeUser);
+                } else {
+                  globalVFS.writeFile(resolvedTarget, content, activeUser);
+                }
+              }
+            } else {
+              // Print to stdout like plain cat << EOF
+              term.write(content.replace(/\n/g, '\r\n'));
+            }
+
+            term.write(promptStr());
+            return;
+          }
+
+          session.collectedLines.push(lineRaw);
+          if (session.delimiter) {
+            term.write('> ');
+          } else {
+            // Echo stdout to terminal (like authentic tee/cat in Linux)
+            term.writeln(lineRaw);
+          }
           return;
         }
 
@@ -517,6 +559,8 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
                 } else {
                   term.write(`\x1b[7m--More--(${percent}%) [Space: Next page, Enter: Next line, q: Quit]\x1b[0m`);
                 }
+              } else if (session.delimiter) {
+                term.write('> ');
               }
               return;
             }

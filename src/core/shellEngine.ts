@@ -124,7 +124,7 @@ export class ShellEngine {
     return result;
   }
 
-  async execute(commandLine: string, scriptArgs: string[] = []): Promise<ExecutionResult> {
+  async execute(commandLine: string, scriptArgs: string[] = [], pipeInput?: string): Promise<ExecutionResult> {
     const trimmed = commandLine.trim();
     if (!trimmed || trimmed.startsWith('#')) {
       return { stdout: '', stderr: '', exitCode: 0 };
@@ -136,6 +136,38 @@ export class ShellEngine {
     }
     const substituted = await this.expandCommandSubstitutions(aliased, scriptArgs);
     const expanded = this.expandVariables(substituted, scriptArgs);
+
+    // Here-Document (<< EOF / << 'EOF') handling
+    const heredocMatch = expanded.match(/^(.*?)\s*<<\s*['"]?([A-Za-z0-9_]+)['"]?\s*(>|>>)?\s*(\S+)?\s*(?:\|(.*))?$/);
+    if (heredocMatch && !expanded.includes('\n')) {
+      const leftCmd = heredocMatch[1].trim();
+      const delimiter = heredocMatch[2];
+      const redirOp = heredocMatch[3];
+      const redirTarget = heredocMatch[4];
+      const pipeNext = heredocMatch[5]?.trim();
+
+      const targetFiles: string[] = [];
+      let appendMode = false;
+      if (redirOp && redirTarget) {
+        targetFiles.push(redirTarget);
+        appendMode = redirOp === '>>';
+      }
+
+      return {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        interactiveInput: {
+          command: leftCmd || 'cat',
+          targetFiles,
+          appendMode,
+          collectedLines: [],
+          delimiter,
+          pipelineNext: pipeNext || undefined,
+          redirectTarget: redirTarget || undefined,
+        },
+      };
+    }
 
     if (this.isShellControlFlow(expanded)) {
       const res = await this.executeControlFlow(expanded, scriptArgs);
@@ -189,7 +221,7 @@ export class ShellEngine {
     if (/(?<!\|)\|(?!\|)/.test(expanded)) {
       const pipelineCmds = expanded.split(/(?<!\|)\|(?!\|)/).map((c) => c.trim());
       let currentStream: AsyncIterable<string> | null = null;
-      let inputData = '';
+      let inputData = pipeInput || '';
       let lastResult: ExecutionResult = { stdout: '', stderr: '', exitCode: 0 };
       let aggregatedStderr = '';
 
@@ -255,7 +287,7 @@ export class ShellEngine {
       return lastResult;
     }
 
-    const res = await this.executeSingleCommand(expanded, undefined);
+    const res = await this.executeSingleCommand(expanded, pipeInput);
     this.env['?'] = res.exitCode.toString();
     return res;
   }

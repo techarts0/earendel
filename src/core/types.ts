@@ -30,6 +30,9 @@ export interface ExecutionResult {
     targetFiles: string[];
     appendMode: boolean;
     collectedLines: string[];
+    delimiter?: string;
+    pipelineNext?: string;
+    redirectTarget?: string;
   };
   toggleFullscreen?: 'max' | 'restore';
   logout?: boolean;
