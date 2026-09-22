@@ -1297,13 +1297,32 @@ export const textCommands: Command[] = [
     description: 'VIM - Vi IMproved modal text editor',
     category: 'editor',
     execute: (ctx) => {
-      const filePath = ctx.args[0] || 'untitled.txt';
-      const content = ctx.vfs.readFile(filePath) ?? '';
+      const activeUser = ctx.env['USER'] || 'hello';
+      const rawPath = ctx.args[0] || 'untitled.txt';
+      const filePath = ctx.vfs.resolvePath(rawPath, activeUser);
+      const content = ctx.vfs.readFile(filePath, activeUser) ?? '';
       return {
         stdout: '',
         stderr: '',
         exitCode: 0,
-        openVi: { path: filePath, content },
+        openVi: { path: filePath, content, user: activeUser },
+      };
+    },
+  },
+  {
+    name: 'nano',
+    description: 'Nano text editor',
+    category: 'editor',
+    execute: (ctx) => {
+      const activeUser = ctx.env['USER'] || 'hello';
+      const rawPath = ctx.args[0] || 'untitled.txt';
+      const filePath = ctx.vfs.resolvePath(rawPath, activeUser);
+      const content = ctx.vfs.readFile(filePath, activeUser) ?? '';
+      return {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        openNano: { path: filePath, content, user: activeUser },
       };
     },
   },

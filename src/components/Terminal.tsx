@@ -13,8 +13,8 @@ import { globalThemeManager, THEME_PRESETS } from '../core/themeManager';
 import { highlightCommandLine } from '../core/syntaxHighlighter';
 
 interface TerminalProps {
-  onOpenNano?: (opts: { path: string; content: string }) => void;
-  onOpenVi?: (opts: { path: string; content: string }) => void;
+  onOpenNano?: (opts: { path: string; content: string; user?: string }) => void;
+  onOpenVi?: (opts: { path: string; content: string; user?: string }) => void;
   onOpenHarnessTui?: (opts: { path: string; content: string }) => void;
   onOpenHarnessDag?: (opts: { path: string }) => void;
   onOpenCheat?: () => void;
@@ -382,6 +382,22 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
           shellEngineRef.current.setEnv('USER', 'root');
           const res = await shellEngineRef.current.execute(commandLine);
           shellEngineRef.current.setEnv('USER', prevUser);
+
+          if (res.openNano && onOpenNano) {
+            onOpenNano({ ...res.openNano, user: 'root' });
+          }
+          if (res.openVi && onOpenVi) {
+            onOpenVi({ ...res.openVi, user: 'root' });
+          }
+          if (res.openHarnessTui && onOpenHarnessTui) {
+            onOpenHarnessTui(res.openHarnessTui);
+          }
+          if (res.openHarnessDag && onOpenHarnessDag) {
+            onOpenHarnessDag(res.openHarnessDag);
+          }
+          if (res.openCheat && onOpenCheat) {
+            onOpenCheat();
+          }
 
           if (res.stdout) term.write(res.stdout.replace(/\n/g, '\r\n'));
           if (res.stderr) term.write(`\x1b[31m${res.stderr.replace(/\n/g, '\r\n')}\x1b[0m`);

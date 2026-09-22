@@ -187,6 +187,13 @@ export class VirtualFileSystem {
     this.writeFile('/lib/x86_64-linux-gnu/libm.so.6', '#!ELF Math Shared Library\n');
     this.writeFile('/lib64/ld-linux-x86-64.so.2', '#!ELF Dynamic Linker/Loader\n');
 
+    // Shell Interpreters (/bin/bash, /bin/sh)
+    this.writeFile('/bin/bash', '#!ELF GNU bash, version 5.2.15(1)-release (x86_64-pc-linux-gnu)\n', 'root');
+    this.chmod('/bin/bash', 'rwxr-xr-x');
+    this.symlink('/bin/bash', '/bin/sh');
+    this.symlink('/bin/bash', '/usr/bin/bash');
+    this.symlink('/bin/bash', '/usr/bin/sh');
+
     // Standard Agentic Skills Catalog (/skills)
     this.mkdir('/skills/git-commit-helper', true);
     this.writeFile(
@@ -497,6 +504,10 @@ constraints:
     }
 
     return '/' + resolvedParts.join('/');
+  }
+
+  exists(pathStr: string, customHomeOrUser?: string): boolean {
+    return this.getNodeByPath(pathStr, customHomeOrUser) !== null;
   }
 
   getNodeByPath(pathStr: string, customHomeOrUser?: string): VFSNode | null {

@@ -8,8 +8,8 @@ import { FramebufferModal } from './components/FramebufferModal';
 import { HarnessDagModal } from './components/HarnessDagModal';
 
 export function App() {
-  const [nanoModal, setNanoModal] = useState<{ path: string; content: string } | null>(null);
-  const [viModal, setViModal] = useState<{ path: string; content: string } | null>(null);
+  const [nanoModal, setNanoModal] = useState<{ path: string; content: string; user?: string } | null>(null);
+  const [viModal, setViModal] = useState<{ path: string; content: string; user?: string } | null>(null);
   const [harnessTuiModal, setHarnessTuiModal] = useState<{ path: string; content: string } | null>(null);
   const [dagModalData, setDagModalData] = useState<{ path: string } | null>(null);
   const [showCheatModal, setShowCheatModal] = useState(false);
@@ -90,6 +90,7 @@ export function App() {
         <NanoEditorModal
           filePath={nanoModal.path}
           initialContent={nanoModal.content}
+          user={nanoModal.user}
           onClose={() => setNanoModal(null)}
         />
       )}
@@ -99,6 +100,7 @@ export function App() {
         <ViEditorModal
           filePath={viModal.path}
           initialContent={viModal.content}
+          user={viModal.user}
           onClose={() => setViModal(null)}
         />
       )}

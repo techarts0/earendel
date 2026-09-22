@@ -17,13 +17,15 @@ export const findSuiteCommands: Command[] = [
 
       for (const targetCmd of targets) {
         const cmd = globalCommandRegistry.getCommand(targetCmd);
-        if (!cmd) {
+        const vfsBin = ctx.vfs.exists(`/bin/${targetCmd}`);
+        const vfsUsrBin = ctx.vfs.exists(`/usr/bin/${targetCmd}`);
+        if (!cmd && !vfsBin && !vfsUsrBin) {
           out += `${targetCmd} not found\n`;
           hadError = true;
           continue;
         }
 
-        const isUsrBin = ['python3', 'node', 'docker', 'systemctl', 'apt', 'ufw', 'iptables', 'git', 'vim'].includes(targetCmd);
+        const isUsrBin = ['python3', 'node', 'docker', 'systemctl', 'apt', 'ufw', 'iptables', 'git', 'vim'].includes(targetCmd) || (vfsUsrBin && !vfsBin);
         const primaryPath = isUsrBin ? `/usr/bin/${targetCmd}` : `/bin/${targetCmd}`;
         const altPath = `/usr/local/bin/${targetCmd}`;
 

@@ -4,18 +4,21 @@ import { globalVFS } from '../core/vfs';
 interface NanoEditorModalProps {
   filePath: string;
   initialContent: string;
+  user?: string;
   onClose: () => void;
 }
 
 export const NanoEditorModal: React.FC<NanoEditorModalProps> = ({
   filePath,
   initialContent,
+  user,
   onClose,
 }) => {
   const [content, setContent] = useState(initialContent);
 
   const handleSave = () => {
-    globalVFS.writeFile(filePath, content);
+    const effectiveUser = user || (typeof window !== 'undefined' && (window as any).globalShellEngine?.getEnv('USER')) || 'hello';
+    return globalVFS.writeFile(filePath, content, effectiveUser);
   };
 
   const handleSaveAndExit = () => {

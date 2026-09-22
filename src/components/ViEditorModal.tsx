@@ -6,10 +6,11 @@ import { X, Save, Terminal, Info } from 'lucide-react';
 interface ViEditorModalProps {
   filePath: string;
   initialContent: string;
+  user?: string;
   onClose: () => void;
 }
 
-export const ViEditorModal: React.FC<ViEditorModalProps> = ({ filePath, initialContent, onClose }) => {
+export const ViEditorModal: React.FC<ViEditorModalProps> = ({ filePath, initialContent, user, onClose }) => {
   const [content, setContent] = useState(initialContent);
   const [originalContent] = useState(initialContent);
   const [mode, setMode] = useState<'COMMAND' | 'INSERT'>('COMMAND');
@@ -31,6 +32,20 @@ export const ViEditorModal: React.FC<ViEditorModalProps> = ({ filePath, initialC
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const cmdInputRef = useRef<HTMLInputElement>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
+
+  const saveFile = (targetPath: string, textToSave: string): boolean => {
+    const effectiveUser = user || (typeof window !== 'undefined' && (window as any).globalShellEngine?.getEnv('USER')) || 'hello';
+    const ok = globalVFS.writeFile(targetPath, textToSave, effectiveUser);
+    if (ok) {
+      setContent(textToSave);
+      const byteSize = new Blob([textToSave]).size;
+      setStatusMsg(`"${targetPath}" ${textToSave.split('\n').length}L, ${byteSize}B written`);
+      return true;
+    } else {
+      setStatusMsg(`E212: Can't open file for writing: Permission denied`);
+      return false;
+    }
+  };
 
   // Sync cursor row & col
   const updateCursorInfo = () => {
@@ -232,8 +247,10 @@ export const ViEditorModal: React.FC<ViEditorModalProps> = ({ filePath, initialC
         if (pendingKeyRef.current === 'Z') {
           clearPending();
           // ZZ -> :wq
-          globalVFS.writeFile(filePath, content);
-          onClose();
+          const textToSave = textareaRef.current ? textareaRef.current.value : content;
+          if (saveFile(filePath, textToSave)) {
+            onClose();
+          }
           return;
         }
         pendingKeyRef.current = 'Z';
@@ -371,12 +388,12 @@ export const ViEditorModal: React.FC<ViEditorModalProps> = ({ filePath, initialC
       // Normalize :w, :q, :wq, :x, etc.
       if (cmd === 'w' || cmd.startsWith('w ')) {
         const targetPath = cmd.startsWith('w ') ? cmd.slice(2).trim() : filePath;
-        globalVFS.writeFile(targetPath, content);
-        const byteSize = new Blob([content]).size;
-        setStatusMsg(`"${targetPath}" ${content.split('\n').length}L, ${byteSize}B written`);
+        const textToSave = textareaRef.current ? textareaRef.current.value : content;
+        saveFile(targetPath, textToSave);
         setShowCmdBar(false);
       } else if (cmd === 'q') {
-        if (content !== originalContent) {
+        const textToSave = textareaRef.current ? textareaRef.current.value : content;
+        if (textToSave !== originalContent) {
           setStatusMsg('E37: No write since last change (add ! to override)');
           setShowCmdBar(false);
         } else {
@@ -385,8 +402,12 @@ export const ViEditorModal: React.FC<ViEditorModalProps> = ({ filePath, initialC
       } else if (cmd === 'q!' || cmd === 'qa!' || cmd === 'cq') {
         onClose();
       } else if (cmd === 'wq' || cmd === 'x' || cmd === 'wq!' || cmd === 'x!') {
-        globalVFS.writeFile(filePath, content);
-        onClose();
+        const textToSave = textareaRef.current ? textareaRef.current.value : content;
+        if (saveFile(filePath, textToSave)) {
+          onClose();
+        } else {
+          setShowCmdBar(false);
+        }
       } else if (cmd === 'set nu' || cmd === 'set number') {
         setShowLineNumbers(true);
         setStatusMsg('Line numbers enabled');
@@ -531,8 +552,8 @@ export const ViEditorModal: React.FC<ViEditorModalProps> = ({ filePath, initialC
           <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
             <button
               onClick={() => {
-                globalVFS.writeFile(filePath, content);
-                setStatusMsg(`"${filePath}" saved`);
+                const textToSave = textareaRef.current ? textareaRef.current.value : content;
+                saveFile(filePath, textToSave);
               }}
               style={{
                 display: 'flex',

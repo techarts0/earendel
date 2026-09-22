@@ -137,11 +137,54 @@ export const shellControlCommands: Command[] = [
       const scriptPath = ctx.args[0];
       if (!scriptPath) return { stdout: '', stderr: 'source: filename argument required\n', exitCode: 1 };
 
-      const content = ctx.vfs.readFile(scriptPath);
+      const activeUser = ctx.env['USER'] || 'hello';
+      const resolvedPath = ctx.vfs.resolvePath(scriptPath, activeUser);
+      const content = ctx.vfs.readFile(resolvedPath, activeUser);
       if (content === null) return { stdout: '', stderr: `source: ${scriptPath}: file not found\n`, exitCode: 1 };
 
       const { globalShellEngine } = await import('../shellEngine');
-      return await globalShellEngine.execute(content, [scriptPath, ...ctx.args.slice(1)]);
+      return await globalShellEngine.execute(content, [resolvedPath, ...ctx.args.slice(1)]);
+    },
+  },
+  {
+    name: 'bash',
+    aliases: ['sh'],
+    description: 'GNU Bourne-Again SHell interpreter',
+    category: 'sys',
+    execute: async (ctx) => {
+      if (ctx.args.length === 0) {
+        return {
+          stdout: 'GNU bash, version 5.2.15(1)-release (x86_64-pc-linux-gnu)\nType "exit" to exit, or run scripts with: bash script.sh\n',
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+
+      if (ctx.args.includes('--version') || ctx.args.includes('-v')) {
+        return {
+          stdout: 'GNU bash, version 5.2.15(1)-release (x86_64-pc-linux-gnu)\nCopyright (C) 2022 Free Software Foundation, Inc.\nLicense GPLv3+: GNU GPL version 3 or later <http://gnu.org/licenses/gpl.html>\n',
+          stderr: '',
+          exitCode: 0,
+        };
+      }
+
+      if (ctx.args[0] === '-c') {
+        const cmdStr = ctx.args.slice(1).join(' ');
+        const { globalShellEngine } = await import('../shellEngine');
+        return await globalShellEngine.execute(cmdStr);
+      }
+
+      // Execute script file
+      const scriptPath = ctx.args[0];
+      const activeUser = ctx.env['USER'] || 'hello';
+      const resolvedPath = ctx.vfs.resolvePath(scriptPath, activeUser);
+      const content = ctx.vfs.readFile(resolvedPath, activeUser);
+      if (content === null) {
+        return { stdout: '', stderr: `bash: ${scriptPath}: No such file or directory\n`, exitCode: 127 };
+      }
+
+      const { globalShellEngine } = await import('../shellEngine');
+      return await globalShellEngine.execute(content, [resolvedPath, ...ctx.args.slice(1)]);
     },
   },
   {

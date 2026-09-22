@@ -18,8 +18,8 @@ export interface ExecutionResult {
   stdout: string;
   stderr: string;
   exitCode: number;
-  openNano?: { path: string; content: string };
-  openVi?: { path: string; content: string };
+  openNano?: { path: string; content: string; user?: string };
+  openVi?: { path: string; content: string; user?: string };
   openHarnessTui?: { path: string; content: string };
   openHarnessDag?: { path: string };
   loginPrompt?: { username: string };
