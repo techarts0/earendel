@@ -19,6 +19,11 @@ export const eslibNet = {
 
   async gethostbyname(hostname: string): Promise<string> {
     const res = await syscall(SyscallNo.SYS_NET_RESOLVE, hostname);
-    return res.data?.ip || '104.21.55.1';
+    return res.data?.ip || '';
+  },
+
+  async resolve(hostname: string): Promise<{ hostname: string; ip: string; addresses: string[]; error?: string }> {
+    const res = await syscall(SyscallNo.SYS_NET_RESOLVE, hostname);
+    return res.data || { hostname, ip: '', addresses: [], error: res.error || 'Name resolution failed' };
   },
 };

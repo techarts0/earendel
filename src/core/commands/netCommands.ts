@@ -1,79 +1,21 @@
 import { Command } from '../types';
 import { globalVFS } from '../vfs';
 import { globalServiceManager } from '../serviceManager';
+import { isValidIPv4, simulatedNetwork, simulatedResolve } from '../networkSimulation';
 
 export function resolveHostToIp(host: string): string {
-  if (host === 'localhost' || host === '127.0.0.1') return '127.0.0.1';
-  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(host)) return host;
-
   const hostsContent = globalVFS.readFile('/etc/hosts') ?? '';
-  const lines = hostsContent.split('\n');
-
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed || trimmed.startsWith('#')) continue;
-
-    const parts = trimmed.split(/\s+/);
-    if (parts.length >= 2) {
-      const ip = parts[0];
-      const aliases = parts.slice(1);
-      if (aliases.includes(host)) {
-        return ip;
-      }
-    }
-  }
-
-  return host; // Return as-is if unmapped
+  return simulatedResolve(host, hostsContent) || host;
 }
 
-let cachedClientIpInfo: { publicIp: string; localIp: string } | null = null;
-
 export async function getRealClientNetworkInfo(): Promise<{ publicIp: string; localIp: string }> {
-  if (cachedClientIpInfo) return cachedClientIpInfo;
-
-  let publicIp = '127.0.0.1';
-  let localIp = '192.168.1.100';
-
-  try {
-    const res = await fetch('https://api.ipify.org?format=json', { signal: AbortSignal.timeout(3000) });
-    if (res.ok) {
-      const data = await res.json();
-      if (data.ip) publicIp = data.ip;
-    }
-  } catch (e) {
-    try {
-      const fallback = await fetch('https://api.myip.com', { signal: AbortSignal.timeout(2000) });
-      if (fallback.ok) {
-        const d = await fallback.json();
-        if (d.ip) publicIp = d.ip;
-      }
-    } catch (err) {}
-  }
-
-  cachedClientIpInfo = { publicIp, localIp };
-  return cachedClientIpInfo;
+  // Keep the legacy API name, but never disclose or probe the user's real IP.
+  return { publicIp: simulatedNetwork.publicIp, localIp: simulatedNetwork.localIp };
 }
 
 export async function queryDoHDns(domain: string): Promise<string[]> {
-  if (domain === 'localhost' || domain === '127.0.0.1') return ['127.0.0.1'];
-  if (/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/.test(domain)) return [domain];
-
-  try {
-    const res = await fetch(`https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(domain)}&type=A`, {
-      headers: { accept: 'application/dns-json' },
-      signal: AbortSignal.timeout(3000),
-    });
-    if (res.ok) {
-      const json = await res.json();
-      if (json.Answer && Array.isArray(json.Answer)) {
-        const ips = json.Answer.filter((a: any) => a.type === 1).map((a: any) => a.data);
-        if (ips.length > 0) return ips;
-      }
-    }
-  } catch (e) {}
-
-  const mapped = resolveHostToIp(domain);
-  return [mapped !== domain ? mapped : '93.184.216.34'];
+  const ip = resolveHostToIp(domain);
+  return ip !== domain || isValidIPv4(ip) ? [ip] : [];
 }
 
 export const netCommands: Command[] = [
@@ -85,7 +27,7 @@ export const netCommands: Command[] = [
       const ipInfo = await getRealClientNetworkInfo();
       const output = [
         'eth0: flags=4163<UP,BROADCAST,RUNNING,MULTICAST>  mtu 1500',
-        `        inet ${ipInfo.publicIp}  netmask 255.255.255.0  broadcast 192.168.1.255`,
+        `        inet ${ipInfo.localIp}  netmask 255.255.255.0  broadcast 192.168.1.255`,
         '        inet6 fe80::5054:ff:fe12:3456  prefixlen 64  scopeid 0x20<link>',
         '        ether 52:54:00:12:34:56  txqueuelen 1000  (Ethernet)',
         '        RX packets 14205  bytes 18290451 (18.2 MB)',
@@ -121,7 +63,7 @@ export const netCommands: Command[] = [
           '       valid_lft forever preferred_lft forever',
           '2: eth0: <BROADCAST,MULTICAST,UP,LOWER_UP> mtu 1500 qdisc fq_codel state UP group default qlen 1000',
           '    link/ether 52:54:00:12:34:56 brd ff:ff:ff:ff:ff:ff',
-          `    inet ${ipInfo.publicIp}/24 brd 192.168.1.255 scope global eth0`,
+          `    inet ${ipInfo.localIp}/24 brd 192.168.1.255 scope global eth0`,
           '       valid_lft forever preferred_lft forever',
           '    inet6 fe80::5054:ff:fe12:3456/64 scope link',
           '       valid_lft forever preferred_lft forever',
@@ -216,8 +158,9 @@ export const netCommands: Command[] = [
       }
 
       const ips = await queryDoHDns(domain);
+      if (ips.length === 0) return { stdout: '', stderr: `** server can't find ${domain}: NXDOMAIN\n`, exitCode: 1 };
 
-      let output = `Server:\t\t1.1.1.1\nAddress:\t1.1.1.1#53\n\nNon-authoritative answer:\nName:\t${domain}\n`;
+      let output = `Server:\t\t${simulatedNetwork.dns}\nAddress:\t${simulatedNetwork.dns}#53\n\nNon-authoritative answer:\nName:\t${domain}\n`;
       ips.forEach((ip) => {
         output += `Address: ${ip}\n`;
       });
@@ -287,7 +230,7 @@ export const netCommands: Command[] = [
       const { eslibNet } = await import('../eslibNet');
       const res = await eslibNet.fetch(url);
 
-      if (res && res.body) {
+      if (res?.ok) {
         return { stdout: res.body + '\n', stderr: '', exitCode: 0 };
       }
 

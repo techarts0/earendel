@@ -104,25 +104,57 @@ export const shellControlCommands: Command[] = [
   },
   {
     name: 'read',
-    description: 'Read a line from standard input (-p prompt)',
+    description: 'Read a line from standard input (-p prompt, -a array)',
     category: 'sys',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       let prompt = '';
+      let isArray = false;
+      let charLimit: number | undefined;
       let varName = 'REPLY';
 
-      const pIdx = ctx.args.indexOf('-p');
-      if (pIdx !== -1 && ctx.args[pIdx + 1]) {
-        prompt = ctx.args[pIdx + 1];
-        varName = ctx.args[pIdx + 2] || 'REPLY';
-      } else {
-        varName = ctx.args[0] || 'REPLY';
+      let i = 0;
+      while (i < ctx.args.length) {
+        if (ctx.args[i] === '-p' && ctx.args[i + 1] !== undefined) {
+          prompt = ctx.args[i + 1];
+          i += 2;
+        } else if (ctx.args[i] === '-a' && ctx.args[i + 1] !== undefined) {
+          isArray = true;
+          varName = ctx.args[i + 1];
+          i += 2;
+        } else if (ctx.args[i] === '-n' && ctx.args[i + 1] !== undefined) {
+          charLimit = Math.max(0, parseInt(ctx.args[i + 1], 10) || 0);
+          i += 2;
+        } else {
+          varName = ctx.args[i];
+          i++;
+        }
       }
 
-      const inputVal = ctx.pipeInput || 'Earendel Explorer';
-      ctx.env[varName] = inputVal;
+      let inputVal = '';
+      if (ctx.pipeInput !== undefined && ctx.pipeInput !== '') {
+        inputVal = ctx.pipeInput.replace(/\r?\n$/, '');
+      } else if (ctx.shellEngine && ctx.shellEngine.promptHandler) {
+        inputVal = await ctx.shellEngine.promptHandler(prompt);
+      } else {
+        inputVal = 'q'; // safe default when non-interactive
+      }
+
+      if (isArray) {
+        const parts = inputVal.trim() ? inputVal.trim().split(/\s+/) : [];
+        if (ctx.shellEngine && ctx.shellEngine.setArray) {
+          ctx.shellEngine.setArray(varName, parts);
+        } else {
+          parts.forEach((p, idx) => {
+            ctx.env[`${varName}[${idx}]`] = p;
+          });
+        }
+      } else {
+        if (charLimit !== undefined) inputVal = inputVal.slice(0, charLimit);
+        ctx.env[varName] = inputVal;
+      }
 
       return {
-        stdout: prompt ? `${prompt}${inputVal}\n` : '',
+        stdout: prompt && !ctx.shellEngine?.promptHandler ? `${prompt}${inputVal}\n` : '',
         stderr: '',
         exitCode: 0,
       };

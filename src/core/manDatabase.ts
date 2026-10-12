@@ -80,12 +80,12 @@ export const manDatabase: Record<string, ManPage> = {
     optionsEn: [
       { opt: 'status', desc: 'show firewall status and active rule lists' },
       { opt: 'allow PORT', desc: 'allow incoming traffic on specified port' },
-      { opt: 'deny PORT', desc: 'deny incoming traffic on specified port (blocks curl/ping)' },
+      { opt: 'deny PORT', desc: 'deny incoming traffic on specified port; outbound traffic follows the OUTPUT policy' },
     ],
     optionsZh: [
       { opt: 'status', desc: '查看防火墙启用状态及活跃规则清单' },
       { opt: 'allow PORT', desc: '开放并允许目标端口的网络包连通' },
-      { opt: 'deny PORT', desc: '屏蔽拒绝目标端口（物理阻断 curl / ping 访问）' },
+      { opt: 'deny PORT', desc: '拒绝进入本机目标端口；出站流量由 OUTPUT 策略控制' },
     ],
     examplesEn: ['sudo ufw status', 'sudo ufw deny 80'],
     examplesZh: ['sudo ufw status', 'sudo ufw deny 80'],

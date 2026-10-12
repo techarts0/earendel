@@ -6,6 +6,7 @@ import { Language } from '../i18n/translations';
 import { syscall } from '../kernel/syscall';
 import { SyscallNo } from '../kernel/types';
 import './commands'; // Ensure all command plugins are auto-registered
+import { ASTNode, FlowSignal, parseShellScript, splitStatements } from './shellParser';
 
 export class ShellEngine {
   public vfs: VirtualFileSystem;
@@ -25,6 +26,13 @@ export class ShellEngine {
   public lang: Language = 'en';
 
   private lastExitCode: number = 0;
+  private functions: Map<string, ASTNode[]> = new Map();
+  private arrays: Map<string, string[]> = new Map();
+  private functionLocalScopes: Map<string, string | undefined>[] = [];
+  private readonlyVariables = new Set<string>();
+  public promptHandler?: (prompt: string) => Promise<string>;
+  public onStdout?: (text: string) => void;
+  public onStderr?: (text: string) => void;
 
   constructor(vfs: VirtualFileSystem = globalVFS, processManager: ProcessManager = globalProcessManager) {
     this.vfs = vfs;
@@ -60,12 +68,87 @@ export class ShellEngine {
     return cmdStr;
   }
 
+  private splitOperator(text: string, operator: string): string[] {
+    const parts: string[] = [];
+    let quote: 'single' | 'double' | null = null;
+    let escaped = false;
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i <= text.length - operator.length; i++) {
+      const ch = text[i];
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\' && quote !== 'single') { escaped = true; continue; }
+      if (quote === 'single') { if (ch === "'") quote = null; continue; }
+      if (quote === 'double') { if (ch === '"') quote = null; continue; }
+      if (ch === "'") { quote = 'single'; continue; }
+      if (ch === '"') { quote = 'double'; continue; }
+      if (ch === '(') { depth++; continue; }
+      if (ch === ')') { depth = Math.max(0, depth - 1); continue; }
+      if (depth === 0 && text.startsWith(operator, i)) {
+        parts.push(text.slice(start, i));
+        i += operator.length - 1;
+        start = i + 1;
+      }
+    }
+    if (start === 0) return [text];
+    parts.push(text.slice(start));
+    return parts;
+  }
+
+  private splitLogicalOperators(text: string): string[] {
+    const tokens: string[] = [];
+    let quote: 'single' | 'double' | null = null;
+    let escaped = false;
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (escaped) { escaped = false; continue; }
+      if (ch === '\\' && quote !== 'single') { escaped = true; continue; }
+      if (quote === 'single') { if (ch === "'") quote = null; continue; }
+      if (quote === 'double') { if (ch === '"') quote = null; continue; }
+      if (ch === "'") { quote = 'single'; continue; }
+      if (ch === '"') { quote = 'double'; continue; }
+      if (ch === '(') { depth++; continue; }
+      if (ch === ')') { depth = Math.max(0, depth - 1); continue; }
+      if (depth === 0 && (text.startsWith('&&', i) || text.startsWith('||', i))) {
+        tokens.push(text.slice(start, i));
+        tokens.push(text.slice(i, i + 2));
+        i++;
+        start = i + 1;
+      }
+    }
+    if (!tokens.length) return [text];
+    tokens.push(text.slice(start));
+    return tokens;
+  }
+
   getEnv(key: string): string {
     return this.env[key] || '';
   }
 
   setEnv(key: string, val: string): void {
     this.env[key] = val;
+  }
+
+  public setArray(name: string, values: string[]): void {
+    for (const key of Object.keys(this.env)) {
+      if (key.startsWith(`${name}[`) && key.endsWith(']')) {
+        delete this.env[key];
+      }
+    }
+    this.arrays.set(name, values);
+    values.forEach((v, idx) => {
+      this.env[`${name}[${idx}]`] = v;
+    });
+  }
+
+  public getArray(name: string): string[] | undefined {
+    return this.arrays.get(name);
+  }
+
+  public setPromptHandler(handler: (prompt: string) => Promise<string>): void {
+    this.promptHandler = handler;
   }
 
   getHistory(): string[] {
@@ -85,7 +168,80 @@ export class ShellEngine {
   }
 
   private expandVariables(text: string, scriptArgs: string[] = []): string {
-    return text.replace(/\$(?:\{([^}]+)\}|(\w+|\d+|\?|#|@|\*))/g, (match, p1, p2) => {
+    const literals: string[] = [];
+    let result = text.replace(/'(?:[^']*)'/g, (quoted) => {
+      const marker = `\u0000SINGLE_${literals.length}\u0000`;
+      literals.push(quoted);
+      return marker;
+    });
+
+    // 1. Array expansions: ${arr[idx]}, ${arr[@]}, ${arr[*]}
+    result = result.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\[(\d+|@|\*)\]\}/g, (match, arrName, idx) => {
+      const arr = this.arrays.get(arrName);
+      if (idx === '@' || idx === '*') {
+        return arr ? arr.join(' ') : '';
+      }
+      const numIdx = parseInt(idx, 10);
+      if (arr && arr[numIdx] !== undefined) {
+        return arr[numIdx];
+      }
+      if (this.env[`${arrName}[${idx}]`] !== undefined) {
+        return this.env[`${arrName}[${idx}]`];
+      }
+      return '';
+    });
+    result = result.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\[([A-Za-z_][A-Za-z0-9_]*)\]\}/g, (_m, arrName, indexName) => {
+      const index = Number(this.env[indexName] || 0);
+      return this.arrays.get(arrName)?.[index] ?? this.env[`${arrName}[${index}]`] ?? '';
+    });
+
+    // 2. Array length: ${#arr[@]} or ${#arr[*]}
+    result = result.replace(/\$\{#([A-Za-z_][A-Za-z0-9_]*)\[(@|\*)\]\}/g, (match, arrName) => {
+      const arr = this.arrays.get(arrName);
+      return arr ? arr.length.toString() : '0';
+    });
+    result = result.replace(/\$\{#([A-Za-z_][A-Za-z0-9_]*)\}/g, (_m, name) => String((this.env[name] ?? '').length));
+
+    // Indexed array names: ${!array[@]}
+    result = result.replace(/\$\{!([A-Za-z_][A-Za-z0-9_]*)\[(?:@|\*)\]\}/g, (_m, name) => {
+      const values = this.arrays.get(name) || [];
+      return values.map((_value, index) => String(index)).join(' ');
+    });
+
+    // Bash substring and pattern-removal/replacement parameter operators.
+    result = result.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(?::(-?\d+)(?::(\d+))?)\}/g, (m, name, offsetText, lengthText) => {
+      const value = this.env[name] ?? '';
+      const offset = Number(offsetText);
+      const start = offset < 0 ? Math.max(0, value.length + offset) : offset;
+      return lengthText === undefined ? value.slice(start) : value.slice(start, start + Number(lengthText));
+    });
+    result = result.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\[(?:@|\*)\]:(-?\d+)(?::(\d+))?\}/g, (_m, name, offsetText, lengthText) => {
+      const values = this.arrays.get(name) || [];
+      const offset = Number(offsetText);
+      const start = offset < 0 ? Math.max(0, values.length + offset) : offset;
+      return values.slice(start, lengthText === undefined ? undefined : start + Number(lengthText)).join(' ');
+    });
+    result = result.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(##|#|%%|%)(.*?)\}/g, (_m, name, op, pattern) => {
+      const value = this.env[name] ?? '';
+      const escaped = String(pattern).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+      const matches = Array.from({ length: value.length + 1 }, (_unused, i) => i).filter((i) => {
+        const candidate = op.includes('#') ? value.slice(0, i) : value.slice(i);
+        return new RegExp(`^${escaped}$`).test(candidate);
+      });
+      if (!matches.length) return value;
+      if (op.includes('#')) return value.slice(op === '##' ? Math.max(...matches) : Math.min(...matches));
+      return value.slice(0, op === '%%' ? Math.min(...matches) : Math.max(...matches));
+    });
+    result = result.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)(\/\/|\/#|\/%|\/)(.*?)(?:\/(.*?))?\}/g, (_m, name, op, pattern, replacement = '') => {
+      const value = this.env[name] ?? '';
+      const escaped = String(pattern).replace(/[.+^${}()|[\]\\]/g, '\\$&').replace(/\*/g, '.*').replace(/\?/g, '.');
+      if (op === '/#') return value.replace(new RegExp(`^${escaped}`), replacement);
+      if (op === '/%') return value.replace(new RegExp(`${escaped}$`), replacement);
+      return value.replace(new RegExp(escaped, op === '//' ? 'g' : ''), replacement);
+    });
+
+    // 3. Positional and environment variables
+    result = result.replace(/\$(?:\{([^}]+)\}|(\w+|\d+|\?|#|@|\*))/g, (match, p1, p2) => {
       const varName = p1 || p2;
       if (varName === '?') return this.env['?'] || '0';
       if (varName === '#') return scriptArgs.length > 0 ? (scriptArgs.length - 1).toString() : '0';
@@ -94,21 +250,98 @@ export class ShellEngine {
         const index = parseInt(varName, 10);
         return scriptArgs[index] || '';
       }
+      if (this.arrays.has(varName)) {
+        return this.arrays.get(varName)![0] || '';
+      }
       return this.env[varName] !== undefined ? this.env[varName] : match;
+    });
+
+    return result.replace(/\u0000SINGLE_(\d+)\u0000/g, (_m, index) => literals[Number(index)] || '');
+  }
+
+  public expandArithmetic(text: string, scriptArgs: string[] = []): string {
+    return text.replace(/\$\(\(([\s\S]*?)\)\)/g, (match, expr) => {
+      try {
+        return this.evaluateArithmeticExpression(expr, scriptArgs).toString();
+      } catch {
+        return '0';
+      }
     });
   }
 
-  private async expandCommandSubstitutions(text: string, scriptArgs: string[] = []): Promise<string> {
-    let result = text;
+  private evaluateArithmeticExpression(rawExpr: string, scriptArgs: string[] = []): number {
+    let expr = rawExpr.trim();
 
-    // 1. Process $(command)
-    let dollarMatch = result.match(/\$\(([^)]+)\)/);
+    const update = expr.match(/^(?:\+\+|--)?([A-Za-z_][A-Za-z0-9_]*)(\+\+|--|\s*(?:\+=|-=|=)\s*(-?\d+))?$/);
+    if (update) {
+      const name = update[1];
+      const oldValue = Number(this.env[name] || 0) || 0;
+      const operator = update[2] || '';
+      if (operator === '++' || operator === '--' || expr.startsWith('++') || expr.startsWith('--')) {
+        const next = oldValue + (operator.includes('--') || expr.startsWith('--') ? -1 : 1);
+        this.setEnv(name, String(next));
+        return expr.startsWith('++') || expr.startsWith('--') ? next : oldValue;
+      }
+      if (operator) {
+        const assignment = operator.match(/(\+=|-=|=)\s*(-?\d+)/);
+        if (assignment) {
+          const next = assignment[1] === '+=' ? oldValue + Number(assignment[2]) : assignment[1] === '-=' ? oldValue - Number(assignment[2]) : Number(assignment[2]);
+          this.setEnv(name, String(next));
+          return next;
+        }
+      }
+    }
+
+    // Expand ${...} or $var
+    expr = this.expandVariables(expr, scriptArgs);
+
+    // Expand bare array access e.g. args[0], args[2]
+    expr = expr.replace(/([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]/g, (match, arrName, idxStr) => {
+      const idx = parseInt(idxStr, 10);
+      const arr = this.arrays.get(arrName);
+      if (arr && arr[idx] !== undefined) return arr[idx];
+      if (this.env[`${arrName}[${idxStr}]`] !== undefined) return this.env[`${arrName}[${idxStr}]`];
+      return '0';
+    });
+
+    // Expand bare variable identifiers e.g. result
+    expr = expr.replace(/\b([A-Za-z_][A-Za-z0-9_]*)\b/g, (match, varName) => {
+      if (this.env[varName] !== undefined) return this.env[varName];
+      return match;
+    });
+
+    const sanitized = expr.replace(/\s+/g, '');
+    if (!/^[0-9+\-*/%().*^]+$/.test(sanitized)) {
+      return 0;
+    }
+
+    const jsExpr = sanitized.replace(/\^/g, '**');
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-implied-eval
+      const val = Function(`"use strict"; return (${jsExpr});`)();
+      const num = Number(val);
+      return isNaN(num) ? 0 : Math.trunc(num);
+    } catch {
+      return 0;
+    }
+  }
+
+  private async expandCommandSubstitutions(text: string, scriptArgs: string[] = []): Promise<string> {
+    const literals: string[] = [];
+    let result = text.replace(/'(?:[^']*)'/g, (quoted) => {
+      const marker = `\u0000SINGLE_${literals.length}\u0000`;
+      literals.push(quoted);
+      return marker;
+    });
+
+    // 1. Process $(command) - do not match $((arithmetic))
+    let dollarMatch = result.match(/\$\((?!\()([^)]+)\)/);
     while (dollarMatch) {
       const subCmd = dollarMatch[1];
       const res = await this.execute(subCmd, scriptArgs);
       const replacement = (res.stdout || '').replace(/\r?\n$/, '');
       result = result.replace(dollarMatch[0], replacement);
-      dollarMatch = result.match(/\$\(([^)]+)\)/);
+      dollarMatch = result.match(/\$\((?!\()([^)]+)\)/);
     }
 
     // 2. Process `command`
@@ -121,25 +354,77 @@ export class ShellEngine {
       backtickMatch = result.match(/`([^`]+)`/);
     }
 
-    return result;
+    return result.replace(/\u0000SINGLE_(\d+)\u0000/g, (_m, index) => literals[Number(index)] || '');
   }
 
   async execute(commandLine: string, scriptArgs: string[] = [], pipeInput?: string): Promise<ExecutionResult> {
     const trimmed = commandLine.trim();
-    if (!trimmed || trimmed.startsWith('#')) {
+    if (!trimmed || (trimmed.startsWith('#') && !trimmed.includes('\n'))) {
       return { stdout: '', stderr: '', exitCode: 0 };
     }
-
     const aliased = this.expandAlias(trimmed);
-    if (scriptArgs.length === 0 && !this.isShellControlFlow(trimmed)) {
+    const arithmeticCommand = aliased.match(/^\(\((.*)\)\)$/s);
+    if (arithmeticCommand) {
+      const value = this.evaluateArithmeticExpression(arithmeticCommand[1], scriptArgs);
+      const exitCode = value === 0 ? 1 : 0;
+      this.lastExitCode = exitCode;
+      this.env['?'] = String(exitCode);
+      return { stdout: '', stderr: '', exitCode };
+    }
+    if (this.isShellControlFlow(aliased)) {
+      if (scriptArgs.length === 0) {
+        this.history.push(aliased);
+      }
+      const res = await this.executeControlFlow(aliased, scriptArgs);
+      this.lastExitCode = res.exitCode;
+      this.env['?'] = res.exitCode.toString();
+      return res;
+    }
+
+    const invalidIndirectExpansion = aliased.match(/\$\{\$[^}]*\}/);
+    if (invalidIndirectExpansion) {
+      const stderr = `bash: ${invalidIndirectExpansion[0]}: bad substitution\n`;
+      this.lastExitCode = 1;
+      this.env['?'] = '1';
+      return { stdout: '', stderr, exitCode: 1 };
+    }
+
+    if (scriptArgs.length === 0) {
       this.history.push(aliased);
     }
     const substituted = await this.expandCommandSubstitutions(aliased, scriptArgs);
+    const assignmentMatch = substituted.match(/^([A-Za-z_][A-Za-z0-9_]*)=(.*)$/s);
+    if (assignmentMatch && (this.parseArgs(substituted).length === 1 || /^[A-Za-z_][A-Za-z0-9_]*=\$\((?!\()[\s\S]*\)$/.test(aliased) || /^[A-Za-z_][A-Za-z0-9_]*=`[\s\S]*`$/.test(aliased))) {
+      const name = assignmentMatch[1];
+      if (this.readonlyVariables.has(name)) return { stdout: '', stderr: `bash: ${name}: readonly variable\n`, exitCode: 1 };
+      let value = this.expandArithmetic(this.expandVariables(assignmentMatch[2], scriptArgs), scriptArgs);
+      if (/^(['"])[\s\S]*\1$/.test(value)) value = value.slice(1, -1);
+      else if (!value.includes('\n')) {
+        const parsed = this.parseArgs(`${name}=${value}`)[0];
+        if (parsed) value = parsed.slice(parsed.indexOf('=') + 1);
+      }
+      this.setEnv(name, value);
+      this.env['?'] = '0';
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    const indexedAssignment = substituted.match(/^([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]=(.*)$/s);
+    if (indexedAssignment) {
+      const name = indexedAssignment[1];
+      const index = Number(indexedAssignment[2]);
+      const value = this.expandVariables(indexedAssignment[3], scriptArgs).replace(/^(['"])([\s\S]*)\1$/, '$2');
+      const array = this.arrays.get(name) || [];
+      array[index] = value;
+      this.arrays.set(name, array);
+      this.env[`${name}[${index}]`] = value;
+      this.env['?'] = '0';
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
     const expanded = this.expandVariables(substituted, scriptArgs);
+    const withArith = this.expandArithmetic(expanded, scriptArgs);
 
     // Here-Document (<< EOF / << 'EOF') handling
-    const heredocMatch = expanded.match(/^(.*?)\s*<<\s*['"]?([A-Za-z0-9_]+)['"]?\s*(>|>>)?\s*(\S+)?\s*(?:\|(.*))?$/);
-    if (heredocMatch && !expanded.includes('\n')) {
+    const heredocMatch = withArith.match(/^(.*?)\s*<<\s*['"]?([A-Za-z0-9_]+)['"]?\s*(>|>>)?\s*(\S+)?\s*(?:\|(.*))?$/);
+    if (heredocMatch && !withArith.includes('\n')) {
       const leftCmd = heredocMatch[1].trim();
       const delimiter = heredocMatch[2];
       const redirOp = heredocMatch[3];
@@ -169,22 +454,16 @@ export class ShellEngine {
       };
     }
 
-    if (this.isShellControlFlow(expanded)) {
-      const res = await this.executeControlFlow(expanded, scriptArgs);
-      this.lastExitCode = res.exitCode;
-      this.env['?'] = res.exitCode.toString();
-      return res;
-    }
-
     // Logical Operators && and || handling
-    if (expanded.includes('&&') || expanded.includes('||')) {
-      const tokens = expanded.split(/(&&|\|\|)/).map((t) => t.trim()).filter(Boolean);
+    const logicalTokens = this.splitLogicalOperators(withArith);
+    if (logicalTokens.length > 1) {
+      const cleanTokens = logicalTokens.map((t) => t.trim()).filter(Boolean);
       let stdoutAcc = '';
       let stderrAcc = '';
       let currentOp: 'INIT' | 'AND' | 'OR' = 'INIT';
       let lastRes: ExecutionResult = { stdout: '', stderr: '', exitCode: 0 };
 
-      for (const token of tokens) {
+      for (const token of cleanTokens) {
         if (token === '&&') {
           currentOp = 'AND';
           continue;
@@ -218,8 +497,8 @@ export class ShellEngine {
     }
 
     // Pipe | handling (single pipe | not part of ||)
-    if (/(?<!\|)\|(?!\|)/.test(expanded)) {
-      const pipelineCmds = expanded.split(/(?<!\|)\|(?!\|)/).map((c) => c.trim());
+    const pipelineCmds = this.splitOperator(withArith, '|').map((c) => c.trim());
+    if (pipelineCmds.length > 1) {
       let currentStream: AsyncIterable<string> | null = null;
       let inputData = pipeInput || '';
       let lastResult: ExecutionResult = { stdout: '', stderr: '', exitCode: 0 };
@@ -287,151 +566,288 @@ export class ShellEngine {
       return lastResult;
     }
 
-    const res = await this.executeSingleCommand(expanded, pipeInput);
+    const res = await this.executeSingleCommand(withArith, pipeInput);
     this.env['?'] = res.exitCode.toString();
     return res;
   }
 
   private isShellControlFlow(cmdStr: string): boolean {
     return (
-      cmdStr.startsWith('for ') ||
-      cmdStr.startsWith('while ') ||
-      cmdStr.startsWith('if ') ||
-      cmdStr.includes('\n')
+      /^\s*(?:for|while|if|case|function)\b/.test(cmdStr) ||
+      /^\s*\w+\s*\(\)\s*\{?/.test(cmdStr) ||
+      cmdStr.includes('\n') ||
+      splitStatements(cmdStr).length > 1
     );
   }
 
   private async executeControlFlow(scriptText: string, scriptArgs: string[] = []): Promise<ExecutionResult> {
-    let stdoutAcc = '';
-    let stderrAcc = '';
-
-    const lines = scriptText.split(/\n|;/).map((l) => l.trim()).filter(Boolean);
-
-    let i = 0;
-    while (i < lines.length) {
-      const line = lines[i];
-
-      if (!line || line.startsWith('#')) {
-        i++;
-        continue;
-      }
-
-      if (line.startsWith('for ')) {
-        const match = line.match(/^for\s+(\w+)\s+in\s+(.+)$/);
-        if (match) {
-          const varName = match[1];
-          const rawItems = match[2].replace('; do', '').trim().split(/\s+/);
-
-          const bodyLines: string[] = [];
-          i++;
-          while (i < lines.length && lines[i] !== 'done') {
-            if (lines[i] !== 'do' && !lines[i].startsWith('#')) {
-              bodyLines.push(lines[i]);
-            }
-            i++;
-          }
-
-          for (const item of rawItems) {
-            this.setEnv(varName, item);
-            for (const bodyCmd of bodyLines) {
-              const res = await this.execute(bodyCmd, scriptArgs);
-              stdoutAcc += res.stdout;
-              if (res.stderr) stderrAcc += res.stderr;
-            }
-          }
-        }
-      } else if (line.startsWith('while ')) {
-        const condition = line.replace('while ', '').replace('; do', '').trim();
-
-        const bodyLines: string[] = [];
-        i++;
-        while (i < lines.length && lines[i] !== 'done') {
-          if (lines[i] !== 'do' && !lines[i].startsWith('#')) {
-            bodyLines.push(lines[i]);
-          }
-          i++;
-        }
-
-        let safetyCounter = 0;
-        while (this.evaluateCondition(condition) && safetyCounter < 1000) {
-          safetyCounter++;
-          for (const bodyCmd of bodyLines) {
-            const res = await this.execute(bodyCmd, scriptArgs);
-            stdoutAcc += res.stdout;
-            if (res.stderr) stderrAcc += res.stderr;
-          }
-        }
-      } else if (line.startsWith('if ')) {
-        const condition = line.replace('if ', '').replace('; then', '').trim();
-        const isTrue = this.evaluateCondition(condition);
-
-        const thenLines: string[] = [];
-        const elseLines: string[] = [];
-        let inElse = false;
-        i++;
-
-        while (i < lines.length && lines[i] !== 'fi') {
-          if (lines[i] === 'then') {
-            i++;
-            continue;
-          }
-          if (lines[i] === 'else') {
-            inElse = true;
-            i++;
-            continue;
-          }
-          if (!lines[i].startsWith('#')) {
-            if (inElse) {
-              elseLines.push(lines[i]);
-            } else {
-              thenLines.push(lines[i]);
-            }
-          }
-          i++;
-        }
-
-        const targetLines = isTrue ? thenLines : elseLines;
-        for (const targetCmd of targetLines) {
-          const res = await this.execute(targetCmd, scriptArgs);
-          stdoutAcc += res.stdout;
-          if (res.stderr) stderrAcc += res.stderr;
-        }
-      } else {
-        const res = await this.execute(line, scriptArgs);
-        stdoutAcc += res.stdout;
-        if (res.stderr) stderrAcc += res.stderr;
-      }
-      i++;
-    }
-
-    return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: 0 };
+    const astNodes = parseShellScript(scriptText);
+    const flowRes = await this.executeNodes(astNodes, scriptArgs);
+    this.lastExitCode = flowRes.exitCode;
+    this.env['?'] = flowRes.exitCode.toString();
+    return {
+      stdout: flowRes.stdout,
+      stderr: flowRes.stderr,
+      exitCode: flowRes.exitCode,
+      streamed: !!this.onStdout,
+    };
   }
 
-  private evaluateCondition(condition: string): boolean {
-    const clean = condition.replace(/^\[\s*/, '').replace(/\s*\]$/, '').trim();
-    if (!clean) return false;
+  private async executeNodes(
+    nodes: ASTNode[],
+    scriptArgs: string[],
+    pipeInput?: string
+  ): Promise<{ stdout: string; stderr: string; exitCode: number; signal: FlowSignal }> {
+    let stdoutAcc = '';
+    let stderrAcc = '';
+    let lastExitCode = 0;
 
-    if (clean.startsWith('-z ')) {
-      const val = clean.replace('-z ', '').trim().replace(/^["']|["']$/g, '');
+    for (const node of nodes) {
+      switch (node.type) {
+        case 'COMMAND': {
+          const res = await this.execute(node.line, scriptArgs, pipeInput);
+          if (this.onStdout && res.stdout) {
+            this.onStdout(res.stdout);
+          }
+          if (this.onStderr && res.stderr) {
+            this.onStderr(res.stderr);
+          }
+          stdoutAcc += res.stdout;
+          if (res.stderr) stderrAcc += res.stderr;
+          lastExitCode = res.exitCode;
+          this.lastExitCode = lastExitCode;
+          this.env['?'] = lastExitCode.toString();
+          break;
+        }
+        case 'FUNCTION_DEF': {
+          this.functions.set(node.name, node.body);
+          break;
+        }
+        case 'IF': {
+          const isTrue = await this.evaluateConditionAsync(node.condition, scriptArgs);
+          const targetBranch = isTrue ? node.thenBranch : node.elseBranch;
+          const res = await this.executeNodes(targetBranch, scriptArgs, pipeInput);
+          stdoutAcc += res.stdout;
+          if (res.stderr) stderrAcc += res.stderr;
+          lastExitCode = res.exitCode;
+          if (res.signal.type !== 'NONE') {
+            return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: res.signal };
+          }
+          break;
+        }
+        case 'WHILE': {
+          let safetyCounter = 0;
+          while (safetyCounter < 5000) {
+            const isTrue = await this.evaluateConditionAsync(node.condition, scriptArgs);
+            if (!isTrue) break;
+            safetyCounter++;
+
+            const res = await this.executeNodes(node.body, scriptArgs, pipeInput);
+            stdoutAcc += res.stdout;
+            if (res.stderr) stderrAcc += res.stderr;
+            lastExitCode = res.exitCode;
+
+            if (res.signal.type === 'BREAK') {
+              if (res.signal.count <= 1) {
+                break;
+              } else {
+                return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: { type: 'BREAK', count: res.signal.count - 1 } };
+              }
+            }
+            if (res.signal.type === 'CONTINUE') {
+              if (res.signal.count <= 1) {
+                continue;
+              } else {
+                return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: { type: 'CONTINUE', count: res.signal.count - 1 } };
+              }
+            }
+            if (res.signal.type === 'RETURN') {
+              return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: res.signal };
+            }
+          }
+          break;
+        }
+        case 'FOR': {
+          const expandedItems: string[] = [];
+          for (const item of node.items) {
+            let exp = await this.expandCommandSubstitutions(item, scriptArgs);
+            exp = this.expandVariables(exp, scriptArgs);
+            const range = exp.match(/^\{(-?\d+)\.\.(-?\d+)(?:\.\.(-?\d+))?\}$/);
+            if (range) {
+              const from = Number(range[1]);
+              const to = Number(range[2]);
+              const step = Number(range[3] || (from <= to ? 1 : -1));
+              if (step !== 0) for (let n = from; step > 0 ? n <= to : n >= to; n += step) expandedItems.push(String(n));
+            } else {
+              expandedItems.push(...exp.split(/\s+/).filter(Boolean));
+            }
+          }
+
+          for (const item of expandedItems) {
+            this.setEnv(node.variable, item);
+            const res = await this.executeNodes(node.body, scriptArgs, pipeInput);
+            stdoutAcc += res.stdout;
+            if (res.stderr) stderrAcc += res.stderr;
+            lastExitCode = res.exitCode;
+
+            if (res.signal.type === 'BREAK') {
+              if (res.signal.count <= 1) break;
+              return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: { type: 'BREAK', count: res.signal.count - 1 } };
+            }
+            if (res.signal.type === 'CONTINUE') {
+              if (res.signal.count <= 1) continue;
+              return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: { type: 'CONTINUE', count: res.signal.count - 1 } };
+            }
+            if (res.signal.type === 'RETURN') {
+              return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: res.signal };
+            }
+          }
+          break;
+        }
+        case 'ARITHMETIC_FOR': {
+          if (node.init) await this.execute(node.init, scriptArgs);
+          let safetyCounter = 0;
+          while (safetyCounter++ < 5000 && (!node.condition || this.evaluateArithmeticExpression(node.condition, scriptArgs) !== 0)) {
+            const res = await this.executeNodes(node.body, scriptArgs, pipeInput);
+            stdoutAcc += res.stdout;
+            stderrAcc += res.stderr;
+            lastExitCode = res.exitCode;
+            if (res.signal.type === 'BREAK') {
+              if (res.signal.count <= 1) break;
+              return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: { type: 'BREAK', count: res.signal.count - 1 } };
+            }
+            if (res.signal.type === 'CONTINUE' && res.signal.count > 1) return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: { type: 'CONTINUE', count: res.signal.count - 1 } };
+            if (res.signal.type === 'RETURN') return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: res.signal };
+            if (node.update) this.evaluateArithmeticExpression(node.update, scriptArgs);
+          }
+          break;
+        }
+        case 'CASE': {
+          const targetVal = this.expandVariables(node.expression, scriptArgs).trim().replace(/^['"]|['"]$/g, '');
+          for (const branch of node.branches) {
+            let matched = false;
+            if (branch.isDefault) {
+              matched = true;
+            } else {
+              for (const pattern of branch.patterns) {
+                if (this.matchCasePattern(targetVal, pattern)) {
+                  matched = true;
+                  break;
+                }
+              }
+            }
+            if (matched) {
+              const res = await this.executeNodes(branch.body, scriptArgs, pipeInput);
+              stdoutAcc += res.stdout;
+              if (res.stderr) stderrAcc += res.stderr;
+              lastExitCode = res.exitCode;
+              if (res.signal.type !== 'NONE') {
+                return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: res.signal };
+              }
+              break;
+            }
+          }
+          break;
+        }
+        case 'BREAK': {
+          return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: { type: 'BREAK', count: node.count } };
+        }
+        case 'CONTINUE': {
+          return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: { type: 'CONTINUE', count: node.count } };
+        }
+        case 'RETURN': {
+          const expandedCode = this.expandVariables(node.code, scriptArgs);
+          const code = /^-?\d+$/.test(expandedCode) ? Number(expandedCode) : this.evaluateArithmeticExpression(expandedCode, scriptArgs);
+          this.env['?'] = String(code);
+          this.lastExitCode = code;
+          return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: code, signal: { type: 'RETURN', exitCode: code } };
+        }
+      }
+    }
+
+    return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: { type: 'NONE' } };
+  }
+
+  private async evaluateConditionAsync(condition: string, scriptArgs: string[] = []): Promise<boolean> {
+    const expanded = this.expandVariables(condition, scriptArgs).trim();
+    if (!expanded) return false;
+
+    const arithmeticCondition = expanded.match(/^\(\((.*)\)\)$/s);
+    if (arithmeticCondition) return this.evaluateArithmeticExpression(arithmeticCondition[1], scriptArgs) !== 0;
+
+    let clean = expanded;
+    if (clean.startsWith('[[') && clean.endsWith(']]')) {
+      clean = clean.slice(2, -2).trim();
+    } else if (clean.startsWith('[') && clean.endsWith(']')) {
+      clean = clean.slice(1, -1).trim();
+    } else {
+      if (clean === 'true') return true;
+      if (clean === 'false') return false;
+
+      const cmdRes = await this.execute(clean, scriptArgs);
+      return cmdRes.exitCode === 0;
+    }
+
+    // Handle logical OR (||)
+    const orParts = clean.split(/\s+\|\|\s+/);
+    if (orParts.length > 1) {
+      for (const part of orParts) {
+        if (await this.evaluateConditionAsync(`[[ ${part} ]]`, scriptArgs)) {
+          return true;
+        }
+      }
+      return false;
+    }
+
+    // Handle logical AND (&&)
+    const andParts = clean.split(/\s+&&\s+/);
+    if (andParts.length > 1) {
+      for (const part of andParts) {
+        if (!(await this.evaluateConditionAsync(`[[ ${part} ]]`, scriptArgs))) {
+          return false;
+        }
+      }
+      return true;
+    }
+
+    return this.evaluateAtomCondition(clean);
+  }
+
+  private evaluateAtomCondition(rawAtom: string): boolean {
+    const atom = rawAtom.trim();
+    if (!atom) return false;
+    if (atom === 'true') return true;
+    if (atom === 'false') return false;
+
+    if (atom.startsWith('! ')) {
+      return !this.evaluateAtomCondition(atom.substring(2));
+    }
+
+    if (atom.startsWith('-z ')) {
+      const val = atom.substring(3).trim().replace(/^["']|["']$/g, '');
       return val === '';
     }
-    if (clean.startsWith('-n ')) {
-      const val = clean.replace('-n ', '').trim().replace(/^["']|["']$/g, '');
+    if (atom.startsWith('-n ')) {
+      const val = atom.substring(3).trim().replace(/^["']|["']$/g, '');
       return val !== '';
     }
 
-    if (clean.startsWith('-f ')) {
-      const file = clean.replace('-f ', '').trim().replace(/^["']|["']$/g, '');
-      const node = globalVFS.getNodeByPath(file);
+    if (atom.startsWith('-f ')) {
+      const file = atom.substring(3).trim().replace(/^["']|["']$/g, '');
+      const node = this.vfs.getNodeByPath(file);
       return node !== null && node.type === 'file';
     }
-    if (clean.startsWith('-d ')) {
-      const dir = clean.replace('-d ', '').trim().replace(/^["']|["']$/g, '');
-      const node = globalVFS.getNodeByPath(dir);
+    if (atom.startsWith('-d ')) {
+      const dir = atom.substring(3).trim().replace(/^["']|["']$/g, '');
+      const node = this.vfs.getNodeByPath(dir);
       return node !== null && node.type === 'directory';
     }
+    if (atom.startsWith('-e ')) {
+      const p = atom.substring(3).trim().replace(/^["']|["']$/g, '');
+      return this.vfs.getNodeByPath(p) !== null;
+    }
 
-    const match = clean.match(/^(.*?)\s+(==|=|!=|-eq|-ne|-lt|-gt|-le|-ge)\s+(.*)$/);
+    const match = atom.match(/^(.*?)\s+(==|=|!=|-eq|-ne|-lt|-gt|-le|-ge)\s+(.*)$/);
     if (match) {
       const left = match[1].trim().replace(/^["']|["']$/g, '');
       const op = match[2];
@@ -447,21 +863,41 @@ export class ShellEngine {
         case '!=':
           return left !== right;
         case '-eq':
-          return nLeft === nRight;
+          return !isNaN(nLeft) && !isNaN(nRight) && nLeft === nRight;
         case '-ne':
-          return nLeft !== nRight;
+          return !isNaN(nLeft) && !isNaN(nRight) && nLeft !== nRight;
         case '-lt':
-          return nLeft < nRight;
+          return !isNaN(nLeft) && !isNaN(nRight) && nLeft < nRight;
         case '-gt':
-          return nLeft > nRight;
+          return !isNaN(nLeft) && !isNaN(nRight) && nLeft > nRight;
         case '-le':
-          return nLeft <= nRight;
+          return !isNaN(nLeft) && !isNaN(nRight) && nLeft <= nRight;
         case '-ge':
-          return nLeft >= nRight;
+          return !isNaN(nLeft) && !isNaN(nRight) && nLeft >= nRight;
       }
     }
 
-    return Boolean(clean);
+    return Boolean(atom);
+  }
+
+  private matchCasePattern(target: string, pattern: string): boolean {
+    if (pattern === target) return true;
+    if (pattern === '*') return true;
+    try {
+      let regexStr = '^';
+      for (let i = 0; i < pattern.length; i++) {
+        const char = pattern[i];
+        if (char === '\\' && i + 1 < pattern.length) {
+          regexStr += pattern[++i].replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        } else if (char === '*') regexStr += '.*';
+        else if (char === '?') regexStr += '.';
+        else regexStr += char.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+      }
+      regexStr += '$';
+      return new RegExp(regexStr).test(target);
+    } catch {
+      return pattern === target;
+    }
   }
 
   private async executeSingleCommand(cmdStr: string, pipeInput: string | undefined = undefined): Promise<ExecutionResult> {
@@ -496,22 +932,59 @@ export class ShellEngine {
       };
     }
 
+    rawCmd = this.expandArithmetic(rawCmd);
+    const arrayDeclaration = rawCmd.match(/^([A-Za-z_][A-Za-z0-9_]*)=\((.*)\)$/s);
+    if (arrayDeclaration) {
+      const values = this.parseArgs(arrayDeclaration[2]);
+      this.setArray(arrayDeclaration[1], values);
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    const letAssignment = rawCmd.match(/^let\s+([A-Za-z_][A-Za-z0-9_]*)=\(?([\s\S]*?)\)?$/);
+    if (letAssignment) {
+      const value = this.evaluateArithmeticExpression(letAssignment[2]);
+      this.setEnv(letAssignment[1], String(value));
+      return { stdout: '', stderr: '', exitCode: value === 0 ? 1 : 0 };
+    }
     const args = this.parseArgs(rawCmd);
     if (args.length === 0) return { stdout: '', stderr: '', exitCode: 0 };
 
-    // Support inline VAR=value assignment syntax & childEnv isolation
+    // Support inline VAR=value and ARR[idx]=value assignment syntax & childEnv isolation
     const childEnv = { ...this.env };
     let cmdIdx = 0;
-    while (cmdIdx < args.length && /^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(args[cmdIdx])) {
-      const eqIdx = args[cmdIdx].indexOf('=');
-      const key = args[cmdIdx].substring(0, eqIdx);
-      const val = args[cmdIdx].substring(eqIdx + 1).replace(/^["']|["']$/g, '');
-      if (args.length === 1) {
-        this.setEnv(key, val);
-        return { stdout: '', stderr: '', exitCode: 0 };
+    while (cmdIdx < args.length) {
+      const arrayAssignMatch = args[cmdIdx].match(/^([A-Za-z_][A-Za-z0-9_]*)\[(\d+)\]=(.*)$/);
+      if (arrayAssignMatch) {
+        const arrName = arrayAssignMatch[1];
+        const idx = parseInt(arrayAssignMatch[2], 10);
+        const val = arrayAssignMatch[3].replace(/^["']|["']$/g, '');
+        let arr = this.arrays.get(arrName);
+        if (!arr) {
+          arr = [];
+          this.arrays.set(arrName, arr);
+        }
+        arr[idx] = val;
+        this.env[`${arrName}[${idx}]`] = val;
+        if (args.length === 1) {
+          return { stdout: '', stderr: '', exitCode: 0 };
+        }
+        cmdIdx++;
+        continue;
       }
-      childEnv[key] = val;
-      cmdIdx++;
+
+      if (/^[A-Za-z_][A-Za-z0-9_]*=.*$/.test(args[cmdIdx])) {
+        const eqIdx = args[cmdIdx].indexOf('=');
+        const key = args[cmdIdx].substring(0, eqIdx);
+        const val = args[cmdIdx].substring(eqIdx + 1).replace(/^["']|["']$/g, '');
+        if (args.length === 1) {
+          this.setEnv(key, val);
+          return { stdout: '', stderr: '', exitCode: 0 };
+        }
+        childEnv[key] = val;
+        cmdIdx++;
+        continue;
+      }
+
+      break;
     }
 
     if (cmdIdx >= args.length) return { stdout: '', stderr: '', exitCode: 0 };
@@ -520,7 +993,78 @@ export class ShellEngine {
     const rawCmdArgs = args.slice(cmdIdx + 1);
     const cmdArgs = this.expandGlobs(rawCmdArgs);
 
+    if (cmdName === 'unset') {
+      for (const name of cmdArgs) {
+        delete this.env[name];
+        this.arrays.delete(name);
+        for (const key of Object.keys(this.env)) if (key.startsWith(`${name}[`)) delete this.env[key];
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    if (cmdName === 'readonly') {
+      for (const item of cmdArgs) {
+        const eq = item.indexOf('=');
+        const name = eq < 0 ? item : item.slice(0, eq);
+        if (eq >= 0) this.setEnv(name, item.slice(eq + 1));
+        this.readonlyVariables.add(name);
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+
+    if (cmdName === 'local') {
+      const scope = this.functionLocalScopes[this.functionLocalScopes.length - 1];
+      for (const assignment of cmdArgs) {
+        const eq = assignment.indexOf('=');
+        const name = eq < 0 ? assignment : assignment.slice(0, eq);
+        if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(name)) continue;
+        if (scope && !scope.has(name)) scope.set(name, this.env[name]);
+        if (eq >= 0) this.setEnv(name, assignment.slice(eq + 1));
+      }
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+
+    if (cmdName === 'let') {
+      let value = 0;
+      for (const expr of cmdArgs) value = this.evaluateArithmeticExpression(expr);
+      return { stdout: '', stderr: '', exitCode: value === 0 ? 1 : 0 };
+    }
+
+    for (const assignment of cmdArgs) {
+      const eq = assignment.indexOf('=');
+      if (eq > 0 && this.readonlyVariables.has(assignment.slice(0, eq))) {
+        return { stdout: '', stderr: `bash: ${assignment.slice(0, eq)}: readonly variable\n`, exitCode: 1 };
+      }
+    }
+
     let res: ExecutionResult = { stdout: '', stderr: '', exitCode: 0 };
+
+    if (cmdName === 'break' || cmdName === 'continue') {
+      return { stdout: '', stderr: '', exitCode: 0 };
+    }
+    if (cmdName === 'return') {
+      const code = parseInt(cmdArgs[0] || '0', 10);
+      return { stdout: '', stderr: '', exitCode: isNaN(code) ? 0 : code };
+    }
+
+    if (this.functions.has(cmdName)) {
+      const funcBody = this.functions.get(cmdName)!;
+      const funcArgs = [cmdName, ...cmdArgs];
+      const localScope = new Map<string, string | undefined>();
+      this.functionLocalScopes.push(localScope);
+      const funcRes = await this.executeNodes(funcBody, funcArgs, pipeInput);
+      this.functionLocalScopes.pop();
+      for (const [name, value] of localScope) {
+        if (value === undefined) delete this.env[name];
+        else this.env[name] = value;
+      }
+      this.lastExitCode = funcRes.exitCode;
+      this.env['?'] = funcRes.exitCode.toString();
+      return {
+        stdout: funcRes.stdout,
+        stderr: funcRes.stderr,
+        exitCode: funcRes.exitCode,
+      };
+    }
 
     // Intercept /dev device pipeline commands
     if (cmdName === '/dev/ai' || cmdName === 'ai') {
@@ -649,7 +1193,7 @@ export class ShellEngine {
         await syscall(SyscallNo.SYS_WAITPID, childPid);
       }
     } else {
-      const isBuiltin = ['cd', 'export', 'unset', 'alias', 'unalias', 'exit', 'su', 'source', '.'].includes(cmdName);
+      const isBuiltin = ['cd', 'export', 'unset', 'alias', 'unalias', 'exit', 'su', 'source', '.', 'read'].includes(cmdName);
       const ctx: ExecutionContext = {
         vfs: globalVFS,
         env: isBuiltin ? this.env : childEnv,

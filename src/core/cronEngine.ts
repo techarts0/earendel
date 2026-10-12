@@ -17,6 +17,7 @@ export class CronEngine {
   private timer: any = null;
   private jobs: CronJobEntry[] = [];
   private crontabPath = '/var/spool/cron/crontabs/hello';
+  private lastTickMinute: number = -1;
 
   constructor() {
     this.initCrontabFile();
@@ -99,17 +100,24 @@ export class CronEngine {
    * Main cron tick loop evaluated every second
    */
   private async tick() {
-    if (this.jobs.length === 0) return;
     const now = new Date();
+    const minuteKey = Math.floor(now.getTime() / 60_000);
+
+    // Use the full minute timestamp so the same minute value in the next
+    // hour/day is not mistaken for a duplicate tick.
+    if (minuteKey === this.lastTickMinute) return;
+    this.lastTickMinute = minuteKey;
+    // Editors write the crontab after the `crontab -e` command has returned.
+    // Refresh at the minute boundary so those saved changes become active.
+    this.reloadJobs();
+    if (this.jobs.length === 0) return;
+
     const currentMin = now.getMinutes();
+
     const currentHour = now.getHours();
     const currentDom = now.getDate();
     const currentMonth = now.getMonth() + 1; // 1-12
     const currentDow = now.getDay(); // 0-6 (0=Sun)
-    const currentSecond = now.getSeconds();
-
-    // Only trigger at the start of a minute (second == 0)
-    if (currentSecond !== 0) return;
 
     for (const job of this.jobs) {
       if (
@@ -125,47 +133,72 @@ export class CronEngine {
   }
 
   private async executeCronJob(job: CronJobEntry) {
+    let childPid: number | undefined;
     try {
       const { syscall } = await import('../kernel/syscall');
       const { SyscallNo } = await import('../kernel/types');
       const forkRes = await syscall(SyscallNo.SYS_FORK, `cron: ${job.command}`, '/home/hello');
-      const childPid = forkRes.data || 501;
+      if (forkRes.code === 0 && typeof forkRes.data === 'number') {
+        childPid = forkRes.data;
+      } else {
+        console.error(`[cron] could not register process for job (${job.rawLine}):`, forkRes.error || forkRes.code);
+      }
 
       const { globalShellEngine } = await import('./shellEngine');
+      const result = await globalShellEngine.execute(job.command);
       job.lastRunTimestamp = Date.now();
-      await globalShellEngine.execute(job.command);
-
-      await syscall(SyscallNo.SYS_EXIT, childPid);
-    } catch (e) { }
+      if (result.exitCode !== 0 || result.stderr) {
+        console.error(`[cron] job failed (${job.rawLine}): ${result.stderr || `exit ${result.exitCode}`}`);
+      }
+    } catch (e) {
+      console.error(`[cron] could not execute job (${job.rawLine}):`, e);
+    } finally {
+      if (childPid !== undefined) {
+        try {
+          const { syscall } = await import('../kernel/syscall');
+          const { SyscallNo } = await import('../kernel/types');
+          await syscall(SyscallNo.SYS_EXIT, childPid);
+        } catch (e) {
+          console.error(`[cron] could not reap process ${childPid}:`, e);
+        }
+      }
+    }
   }
 
   /**
    * Evaluates standard cron field expressions
    */
   private matchField(fieldExpr: string, val: number, minBound: number, maxBound: number): boolean {
-    if (fieldExpr === '*') return true;
+    const isDayOfWeek = minBound === 0 && maxBound === 6;
 
-    // Step values: */5
-    if (fieldExpr.startsWith('*/')) {
-      const step = parseInt(fieldExpr.slice(2), 10);
-      return !isNaN(step) && step > 0 && val % step === 0;
-    }
+    return fieldExpr.split(',').some((part) => {
+      const pieces = part.trim().split('/');
+      if (pieces.length > 2) return false;
 
-    // Comma lists: 1,5,10
-    if (fieldExpr.includes(',')) {
-      const items = fieldExpr.split(',').map((s) => parseInt(s.trim(), 10));
-      return items.includes(val);
-    }
+      const step = pieces.length === 2 ? Number(pieces[1]) : 1;
+      if (!Number.isInteger(step) || step < 1) return false;
 
-    // Range: 1-5
-    if (fieldExpr.includes('-')) {
-      const [start, end] = fieldExpr.split('-').map((s) => parseInt(s.trim(), 10));
-      return !isNaN(start) && !isNaN(end) && val >= start && val <= end;
-    }
+      const rangeExpr = pieces[0];
+      let start: number;
+      let end: number;
+      if (rangeExpr === '*') {
+        start = minBound;
+        end = maxBound;
+      } else {
+        const range = rangeExpr.match(/^(\d+)(?:-(\d+))?$/);
+        if (!range) return false;
+        start = Number(range[1]);
+        end = range[2] === undefined ? start : Number(range[2]);
+        if (start < minBound || start > maxBound + (isDayOfWeek ? 1 : 0) || end < minBound || end > maxBound + (isDayOfWeek ? 1 : 0) || start > end) {
+          return false;
+        }
+      }
 
-    // Exact value: 15
-    const exact = parseInt(fieldExpr, 10);
-    return exact === val;
+      for (let candidate = start; candidate <= end; candidate += step) {
+        if ((isDayOfWeek && candidate === 7 ? 0 : candidate) === val) return true;
+      }
+      return false;
+    });
   }
 
   public getJobs(): CronJobEntry[] {

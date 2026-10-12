@@ -44,6 +44,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
     redirectTarget?: string;
   } | null>(null);
   const historyIndexRef = useRef<number>(-1);
+  const pendingReadLineRef = useRef<((line: string) => void) | null>(null);
 
   const promptStr = () => {
     const pwd = globalVFS.getPwd();
@@ -94,6 +95,22 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
 
     xtermRef.current = term;
     fitAddonRef.current = fitAddon;
+
+    shellEngineRef.current.setPromptHandler((prompt: string) => {
+      if (prompt) {
+        term.write(prompt);
+      }
+      return new Promise<string>((resolve) => {
+        pendingReadLineRef.current = resolve;
+      });
+    });
+
+    shellEngineRef.current.onStdout = (text: string) => {
+      term.write(text.replace(/\n/g, '\r\n'));
+    };
+    shellEngineRef.current.onStderr = (text: string) => {
+      term.write(`\x1b[31m${text.replace(/\n/g, '\r\n')}\x1b[0m`);
+    };
 
     const safeFit = () => {
       try {
@@ -150,6 +167,44 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
               term.write(clipText);
             }
           } catch (e) { }
+        }
+        return;
+      }
+
+      // Handle interactive read prompt input
+      if (pendingReadLineRef.current) {
+        if (key === '\r' || key === '\n') {
+          globalSoundEngine.playEnterSound();
+          term.writeln('');
+          const line = inputBufferRef.current;
+          inputBufferRef.current = '';
+          const resolver = pendingReadLineRef.current;
+          pendingReadLineRef.current = null;
+          resolver(line);
+          return;
+        }
+
+        if (key === '\x7f' || key === '\b') {
+          globalSoundEngine.playBackspaceSound();
+          if (inputBufferRef.current.length > 0) {
+            inputBufferRef.current = inputBufferRef.current.slice(0, -1);
+            term.write('\b \b');
+          }
+          return;
+        }
+
+        if (key === '\x03') {
+          term.writeln('^C');
+          inputBufferRef.current = '';
+          const resolver = pendingReadLineRef.current;
+          pendingReadLineRef.current = null;
+          resolver('');
+          return;
+        }
+
+        if (key.length === 1 && key >= ' ') {
+          inputBufferRef.current += key;
+          term.write(key);
         }
         return;
       }
@@ -399,8 +454,8 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
             onOpenCheat();
           }
 
-          if (res.stdout) term.write(res.stdout.replace(/\n/g, '\r\n'));
-          if (res.stderr) term.write(`\x1b[31m${res.stderr.replace(/\n/g, '\r\n')}\x1b[0m`);
+          if (!res.streamed && res.stdout) term.write(res.stdout.replace(/\n/g, '\r\n'));
+          if (!res.streamed && res.stderr) term.write(`\x1b[31m${res.stderr.replace(/\n/g, '\r\n')}\x1b[0m`);
           term.write(promptStr());
           return;
         }
@@ -451,10 +506,10 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
             term.writeln(`Language set to ${targetLang === 'zh' ? '中文' : 'English'}.\r\n`);
           } else {
             const res = await shellEngineRef.current.execute(cmd);
-            if (res.stdout) {
+            if (!res.streamed && res.stdout) {
               term.write(res.stdout.replace(/\n/g, '\r\n'));
             }
-            if (res.stderr) {
+            if (!res.streamed && res.stderr) {
               term.write(`\x1b[31m${res.stderr.replace(/\n/g, '\r\n')}\x1b[0m`);
             }
 

@@ -1326,4 +1326,50 @@ export const textCommands: Command[] = [
       };
     },
   },
+  {
+    name: 'bc',
+    description: 'An arbitrary precision calculator language',
+    category: 'text',
+    execute: (ctx) => {
+      const input = (ctx.pipeInput || ctx.args.join(' ')).trim();
+      if (!input) {
+        return { stdout: '', stderr: '', exitCode: 0 };
+      }
+
+      let scale = 0;
+      let output = '';
+
+      const lines = input.split(/[\n;]/).map((l) => l.trim()).filter(Boolean);
+      for (const line of lines) {
+        if (line.startsWith('scale=')) {
+          const s = parseInt(line.split('=')[1], 10);
+          if (!isNaN(s)) scale = Math.max(0, s);
+          continue;
+        }
+
+        try {
+          const sanitized = line.replace(/\s+/g, '');
+          if (/^[0-9+\-*/%().^]+$/.test(sanitized)) {
+            const jsExpr = sanitized.replace(/\^/g, '**');
+            // eslint-disable-next-line @typescript-eslint/no-implied-eval
+            const val = Function(`"use strict"; return (${jsExpr});`)();
+            const num = Number(val);
+            if (!isNaN(num)) {
+              if (scale > 0) {
+                output += num.toFixed(scale) + '\n';
+              } else {
+                output += Math.trunc(num) + '\n';
+              }
+            } else {
+              output += '0\n';
+            }
+          }
+        } catch {
+          // ignore expression error
+        }
+      }
+
+      return { stdout: output, stderr: '', exitCode: 0 };
+    },
+  },
 ];

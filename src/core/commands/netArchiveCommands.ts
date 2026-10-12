@@ -38,23 +38,25 @@ export const netArchiveCommands: Command[] = [
 
       const target = targetHost || '8.8.8.8';
       const resolvedIps = await queryDoHDns(target);
-      const ip = resolvedIps[0] || '8.8.8.8';
+      const ip = resolvedIps[0];
+      if (!ip) return { stdout: '', stderr: `ping: ${target}: Name or service not known\n`, exitCode: 2 };
 
-      if (!globalFirewallEngine.isPortAllowed(80, 'tcp')) {
+      const pingDecision = globalFirewallEngine.evaluate({ protocol: 'icmp', target: 'OUTPUT' });
+      if (pingDecision !== 'ALLOW') {
         return { stdout: '', stderr: `ping: connect: Network is unreachable (Blocked by Firewall rules)\n`, exitCode: 2 };
       }
+
+      count = Math.max(1, Math.min(count, 100));
+      packetSize = Math.max(0, Math.min(packetSize, 65500));
+      intervalSec = Math.max(0, Math.min(intervalSec, 1));
 
       let out = `PING ${target} (${ip}) ${packetSize}(${packetSize + 28}) bytes of data.\n`;
       const times: number[] = [];
 
       for (let i = 1; i <= count; i++) {
-        const start = performance.now();
-        try {
-          const url = target.startsWith('http') ? target : `https://${target}`;
-          await fetch(url, { method: 'HEAD', mode: 'no-cors', cache: 'no-cache', signal: AbortSignal.timeout(2000) });
-        } catch (e) {}
-        const elapsed = parseFloat((performance.now() - start).toFixed(1));
-        times.push(elapsed > 0 ? elapsed : 14.2);
+        // ICMP is simulated; never probe the user's real network from the browser.
+        const elapsed = 14.2 + ((i * 17) % 31) / 10;
+        times.push(elapsed);
         if (!quiet) {
           out += `${packetSize + 8} bytes from ${ip}: icmp_seq=${i} ttl=117 time=${times[times.length - 1]} ms\n`;
         }
@@ -144,10 +146,11 @@ export const netArchiveCommands: Command[] = [
         }
       }
 
-      // Firewall Rule Enforcement
-      if (!globalFirewallEngine.isPortAllowed(80, 'tcp')) {
-        return { stdout: '', stderr: `curl: (7) Failed to connect to port 80: Connection refused (Blocked by Firewall)\n`, exitCode: 7 };
-      }
+      let requestUrl: URL;
+      try { requestUrl = new URL(rawUrl); } catch { return { stdout: '', stderr: `curl: (3) URL rejected: ${rawUrl}\n`, exitCode: 3 }; }
+      const requestPort = requestUrl.port ? Number(requestUrl.port) : requestUrl.protocol === 'https:' ? 443 : 80;
+      const firewallDecision = globalFirewallEngine.evaluate({ port: requestPort, protocol: 'tcp', target: 'OUTPUT' });
+      if (firewallDecision !== 'ALLOW') return { stdout: '', stderr: `curl: (7) Connection ${firewallDecision.toLowerCase()} by simulated firewall on port ${requestPort}\n`, exitCode: 7 };
 
       if (userAuth) {
         customHeaders['Authorization'] = `Basic ${btoa(userAuth)}`;
@@ -158,26 +161,11 @@ export const netArchiveCommands: Command[] = [
 
       let fetchedResponse: Response | null = null;
       let bodyText = '';
-      let isCorsProxied = false;
-
-      try {
-        fetchedResponse = await fetch(rawUrl, {
-          method,
-          headers: Object.keys(customHeaders).length > 0 ? customHeaders : undefined,
-          body: bodyData,
-        });
-        bodyText = await fetchedResponse.text();
-      } catch (err) {
-        // Fallback CORS Proxy
-        try {
-          const corsProxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(rawUrl)}`;
-          fetchedResponse = await fetch(corsProxyUrl, { method });
-          bodyText = await fetchedResponse.text();
-          isCorsProxied = true;
-        } catch (corsErr) {
-          bodyText = `{\n  "status": "success",\n  "message": "Earendel WebOS Network Engine active for ${rawUrl}",\n  "protocol": "HTTP/1.1",\n  "timestamp": "${new Date().toISOString()}"\n}`;
-        }
-      }
+      const { eslibNet } = await import('../eslibNet');
+      const response = await eslibNet.fetch(rawUrl, { method, headers: customHeaders, body: bodyData });
+      if (!response?.ok) return { stdout: '', stderr: `curl: (7) ${response?.error || response?.statusText || 'Network request failed'}\n`, exitCode: 7 };
+      bodyText = response.body || '';
+      fetchedResponse = { status: response.status, statusText: response.statusText, headers: new Headers(response.headers || []) } as Response;
 
       const status = fetchedResponse ? fetchedResponse.status : 200;
       const statusText = fetchedResponse ? fetchedResponse.statusText || 'OK' : 'OK';
@@ -187,9 +175,6 @@ export const netArchiveCommands: Command[] = [
       headerBlock += `Date: ${new Date().toUTCString()}\n`;
       headerBlock += `Server: Earendel-POSIX-WebOS/1.0\n`;
       headerBlock += `Content-Type: ${contentType}\n`;
-      if (isCorsProxied) {
-        headerBlock += `X-Earendel-Proxy: CORS-Bridge-Active\n`;
-      }
       headerBlock += `\n`;
 
       // Auto Pretty Print JSON if terminal output
@@ -243,11 +228,12 @@ export const netArchiveCommands: Command[] = [
 
       if (!rawUrl) return { stdout: '', stderr: 'wget: missing URL\nUsage: wget [OPTION]... [URL]...\n', exitCode: 1 };
 
-      if (!rawUrl.startsWith('http://') && !rawUrl.startsWith('https://')) {
+      if (!/^https?:\/\//i.test(rawUrl)) {
         rawUrl = 'https://' + rawUrl;
       }
 
-      const parsedUrl = new URL(rawUrl);
+      let parsedUrl: URL;
+      try { parsedUrl = new URL(rawUrl); } catch { return { stdout: '', stderr: `wget: invalid URL '${rawUrl}'\n`, exitCode: 1 }; }
       const host = parsedUrl.hostname;
       const fileName = parsedUrl.pathname.split('/').filter(Boolean).pop() || 'index.html';
       const ip = resolveHostToIp(host);
@@ -255,20 +241,14 @@ export const netArchiveCommands: Command[] = [
       let bodyText = '';
       let contentType = 'text/html';
 
-      try {
-        const res = await fetch(rawUrl);
-        contentType = res.headers.get('content-type') || 'text/html';
-        bodyText = await res.text();
-      } catch (e) {
-        // Fallback fetch via CORS Proxy
-        try {
-          const corsProxyUrl = `https://corsproxy.io/?url=${encodeURIComponent(rawUrl)}`;
-          const res = await fetch(corsProxyUrl);
-          bodyText = await res.text();
-        } catch (err) {
-          bodyText = `<!DOCTYPE html>\n<html>\n<head><title>${host}</title></head>\n<body>\n<h1>Downloaded via Earendel POSIX WebOS</h1>\n<p>Source: ${rawUrl}</p>\n</body>\n</html>\n`;
-        }
-      }
+      const requestPort = parsedUrl.port ? Number(parsedUrl.port) : parsedUrl.protocol === 'https:' ? 443 : 80;
+      const firewallDecision = globalFirewallEngine.evaluate({ port: requestPort, protocol: 'tcp', target: 'OUTPUT' });
+      if (firewallDecision !== 'ALLOW') return { stdout: '', stderr: `wget: connection blocked by simulated firewall on port ${requestPort}\n`, exitCode: 4 };
+      const { eslibNet } = await import('../eslibNet');
+      const response = await eslibNet.fetch(rawUrl);
+      if (!response?.ok) return { stdout: '', stderr: `wget: ${response?.error || response?.statusText || 'Network request failed'}\n`, exitCode: 4 };
+      contentType = (response.headers || []).find(([key]: [string, string]) => key.toLowerCase() === 'content-type')?.[1] || contentType;
+      bodyText = response.body || '';
 
       // POSIX System Call SYS_WRITE -> vfsd IPC
       await syscall(SyscallNo.SYS_WRITE, fileName, bodyText);

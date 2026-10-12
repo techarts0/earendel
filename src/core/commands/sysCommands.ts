@@ -236,7 +236,26 @@ export const sysCommands: Command[] = [
     description: 'Display or set system date and time',
     category: 'sys',
     execute: (ctx) => {
-      return { stdout: `${new Date().toLocaleString(ctx.lang === 'zh' ? 'zh-CN' : 'en-US')}\n`, stderr: '', exitCode: 0 };
+      const formatArg = ctx.args.find(a => a.startsWith('+'));
+      const d = new Date();
+      if (formatArg) {
+        let fmt = formatArg.substring(1);
+        if ((fmt.startsWith('"') && fmt.endsWith('"')) || (fmt.startsWith("'") && fmt.endsWith("'"))) {
+          fmt = fmt.substring(1, fmt.length - 1);
+        }
+
+        const pad = (n: number) => n.toString().padStart(2, '0');
+        let out = fmt;
+        out = out.replace(/%Y/g, d.getFullYear().toString());
+        out = out.replace(/%m/g, pad(d.getMonth() + 1));
+        out = out.replace(/%d/g, pad(d.getDate()));
+        out = out.replace(/%H/g, pad(d.getHours()));
+        out = out.replace(/%M/g, pad(d.getMinutes()));
+        out = out.replace(/%S/g, pad(d.getSeconds()));
+
+        return { stdout: `${out}\n`, stderr: '', exitCode: 0 };
+      }
+      return { stdout: `${d.toLocaleString(ctx.lang === 'zh' ? 'zh-CN' : 'en-US')}\n`, stderr: '', exitCode: 0 };
     },
   },
   {
@@ -462,6 +481,13 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
         if (res.code !== 0) {
           totalStderr += `bash: kill: (${pid}) - No such process\n`;
           hadError = true;
+        } else if (sig === 9 || sig === 15) {
+          // Sync state with shell's job manager if it's a background job
+          const job = ctx.processManager.getJobs().find(j => j.pid === pid);
+          if (job) ctx.processManager.killJob(job.jobId);
+        } else if (sig === 19 || sig === 18) {
+          const job = ctx.processManager.getJobs().find(j => j.pid === pid);
+          if (job) job.status = sig === 19 ? 'Stopped' : 'Running';
         }
       }
 
@@ -597,27 +623,36 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
     name: 'fg',
     description: 'Move job to the foreground',
     category: 'sys',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       const targetStr = (ctx.args[0] || '1').replace('%', '');
       const jobId = parseInt(targetStr, 10);
       const job = ctx.processManager.getJob(jobId);
       if (!job) {
         return { stdout: '', stderr: `fg: job ${targetStr} not found\n`, exitCode: 1 };
       }
+      const command = job.command;
       ctx.processManager.killJob(jobId);
-      return { stdout: `${job.command}\n`, stderr: '', exitCode: 0 };
+      if (ctx.shellEngine?.execute) {
+        const result = await ctx.shellEngine.execute(command);
+        return { ...result, stdout: `${command}\n${result.stdout}` };
+      }
+      return { stdout: `${command}\n`, stderr: '', exitCode: 0 };
     },
   },
   {
     name: 'bg',
     description: 'Move job to the background',
     category: 'sys',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       const targetStr = (ctx.args[0] || '1').replace('%', '');
       const jobId = parseInt(targetStr, 10);
       const job = ctx.processManager.getJob(jobId);
       if (!job) {
         return { stdout: '', stderr: `bg: job ${targetStr} not found\n`, exitCode: 1 };
+      }
+      const result = await syscall(SyscallNo.SYS_KILL, job.pid, 18);
+      if (result.code !== 0) {
+        return { stdout: '', stderr: `bg: ${targetStr}: No such process\n`, exitCode: 1 };
       }
       job.status = 'Running';
       return { stdout: `[${job.jobId}]+ ${job.command} &\n`, stderr: '', exitCode: 0 };

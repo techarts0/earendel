@@ -1,5 +1,6 @@
 import { Command } from '../types';
 import { resolveHostToIp } from './netCommands';
+import { globalFirewallEngine } from '../firewallEngine';
 
 export const netTracerCommands: Command[] = [
   {
@@ -36,6 +37,9 @@ export const netTracerCommands: Command[] = [
     execute: async (ctx) => {
       const target = ctx.args.find((a) => !a.startsWith('-')) || '8.8.8.8';
       const ip = resolveHostToIp(target);
+      if (globalFirewallEngine.evaluate({ port: 33434, protocol: 'udp', target: 'OUTPUT' }) !== 'ALLOW') {
+        return { stdout: '', stderr: 'traceroute: network unreachable (blocked by simulated firewall)\n', exitCode: 1 };
+      }
 
       let out = `traceroute to ${target} (${ip}), 30 hops max, 60 byte packets\n`;
 

@@ -55,7 +55,9 @@ export class ProcessManager {
 
   public removeProcess(pid: number): boolean {
     if (pid <= 2) return false; // Protect init and bash
-    return this.processes.delete(pid);
+    const removed = this.processes.delete(pid);
+    if (removed) globalTaskScheduler.terminateProcess(pid);
+    return removed;
   }
 
   public getProcesses(): ProcessInfo[] {
@@ -67,6 +69,12 @@ export class ProcessManager {
   }
 
   public addJob(command: string, ppid: number = 1): JobInfo {
+    // The task scheduler already owns PIDs 1-9 for kernel services. Allocate
+    // shell jobs outside that range and skip any PID used by a forked process.
+    while (this.nextPid < 10 || globalTaskScheduler.getProcess(this.nextPid)) {
+      this.nextPid++;
+    }
+
     const proc = this.createProcess({
       ppid,
       user: 'hello',
@@ -79,17 +87,20 @@ export class ProcessManager {
       command,
     });
 
+    const isHeavy = command.includes('while true');
+    const cpuUsage = isHeavy ? 99.9 : 0.1;
+
     // Also register PCB in Microkernel TaskScheduler
     globalTaskScheduler.createProcess({
       pid: proc.pid,
       ppid,
-      name: `[bg] ${command}`,
+      name: command.startsWith('bash ') ? command : `[bg] ${command}`,
       user: 'hello',
       state: 'RUNNING',
       startTime: new Date(),
       vszKB: 12000,
       rssKB: 2000,
-      cpuUsagePercent: 0.1,
+      cpuUsagePercent: cpuUsage,
       cwd: '/home/hello',
       fds: new Map([
         [0, { fd: 0, path: '/dev/stdin', offset: 0, flags: 'r' }],

@@ -24,6 +24,9 @@ export class PMDaemon {
       }
 
       case 'SYS_FORK': {
+        while (globalTaskScheduler.getProcess(this.nextPid)) {
+          this.nextPid++;
+        }
         const newPid = this.nextPid++;
         const pcb = globalTaskScheduler.createProcess({
           pid: newPid,
@@ -60,7 +63,9 @@ export class PMDaemon {
         if (!pcb) return { success: false, error: 'ESRCH: No such process' };
 
         if (sig === 9 || sig === 15) {
-          globalTaskScheduler.terminateProcess(targetPid);
+          if (!globalTaskScheduler.terminateProcess(targetPid)) {
+            return { success: false, error: 'EPERM: Operation not permitted' };
+          }
         } else if (sig === 19) {
           globalTaskScheduler.updateState(targetPid, 'BLOCKED');
         } else if (sig === 18) {

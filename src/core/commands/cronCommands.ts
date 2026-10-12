@@ -32,7 +32,6 @@ export const cronCommands: Command[] = [
         const viCmd = globalCommandRegistry.getCommand('vi');
         if (viCmd) {
           const res = await viCmd.execute({ ...ctx, args: [crontabPath] });
-          globalCronEngine.reloadJobs();
           return res;
         }
       }

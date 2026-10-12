@@ -18,6 +18,7 @@ export interface ExecutionResult {
   stdout: string;
   stderr: string;
   exitCode: number;
+  streamed?: boolean;
   openNano?: { path: string; content: string; user?: string };
   openVi?: { path: string; content: string; user?: string };
   openHarnessTui?: { path: string; content: string };
