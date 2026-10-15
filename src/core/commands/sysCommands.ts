@@ -4,7 +4,6 @@ import { globalSoundEngine } from '../soundEngine';
 import { JobInfo } from '../processManager';
 import { globalSnapshotEngine } from '../snapshotEngine';
 import { globalWebTelemetryEngine } from '../webTelemetryEngine';
-import { syscall } from '../../kernel/syscall';
 import { SyscallNo } from '../../kernel/types';
 import { globalTaskScheduler } from '../../kernel/taskScheduler';
 
@@ -477,7 +476,7 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
       let totalStderr = '';
 
       for (const pid of pids) {
-        const res = await syscall(SyscallNo.SYS_KILL, pid, sig);
+        const res = await ctx.syscall(SyscallNo.SYS_KILL, pid, sig);
         if (res.code !== 0) {
           totalStderr += `bash: kill: (${pid}) - No such process\n`;
           hadError = true;
@@ -538,7 +537,7 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
         }
 
         if (matches) {
-          const res = await syscall(SyscallNo.SYS_KILL, p.pid, sig);
+          const res = await ctx.syscall(SyscallNo.SYS_KILL, p.pid, sig);
           if (res.code === 0) killed++;
         }
       }
@@ -650,7 +649,7 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
       if (!job) {
         return { stdout: '', stderr: `bg: job ${targetStr} not found\n`, exitCode: 1 };
       }
-      const result = await syscall(SyscallNo.SYS_KILL, job.pid, 18);
+      const result = await ctx.syscall(SyscallNo.SYS_KILL, job.pid, 18);
       if (result.code !== 0) {
         return { stdout: '', stderr: `bg: ${targetStr}: No such process\n`, exitCode: 1 };
       }

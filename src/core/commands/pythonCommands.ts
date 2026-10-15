@@ -24,7 +24,7 @@ export const pythonCommands: Command[] = [
       }
 
       const scriptArgs = ctx.args.slice(ctx.args.indexOf(targetFile) + 1);
-      const res = await globalPythonEngine.executeScript(node.content || '', scriptArgs);
+      const res = await globalPythonEngine.executeScript(node.content || '', scriptArgs, ctx.syscall);
       return res;
     },
   },

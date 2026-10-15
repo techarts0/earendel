@@ -1,4 +1,4 @@
-import { Command, ExecutionContext, ExecutionResult } from '../types';
+import { Command, ExecutionContext, ExecutionResult, ProcessSyscall } from '../types';
 import { eslibNet } from '../eslibNet';
 import { globalJsEngine } from '../jsRuntime';
 
@@ -49,7 +49,7 @@ function parseLmsConfig(vfs: ExecutionContext['vfs']): LMSConfig {
 }
 
 // 辅助请求函数
-async function lmsRequest(config: LMSConfig, path: string, method: string = 'GET', body: any = null): Promise<any> {
+async function lmsRequest(config: LMSConfig, path: string, syscall: ProcessSyscall, signal?: AbortSignal, method: string = 'GET', body: any = null): Promise<any> {
   const base = (config.baseUrl || 'https://edu.tangram.techarts.cn').replace(/\/$/, '');
   const url = `${base}${path}`;
   const headers: Record<string, string> = {
@@ -67,7 +67,7 @@ async function lmsRequest(config: LMSConfig, path: string, method: string = 'GET
     opts.body = typeof body === 'string' ? body : JSON.stringify(body);
   }
 
-  const response = await eslibNet.fetch(url, opts);
+  const response = await eslibNet.fetch(url, { ...opts, signal }, syscall);
   if (typeof response === 'string') {
     try {
       return JSON.parse(response);
@@ -200,7 +200,7 @@ export const lmsCommands: Command[] = [
       // ==========================
       if (subCommand === 'whoami') {
         try {
-          const user = await lmsRequest(config, '/api/external/me');
+          const user = await lmsRequest(config, '/api/external/me', ctx.syscall, ctx.abortSignal);
           if (!user || user.error || !user.id) {
             return {
               stdout: '',
@@ -277,7 +277,7 @@ export const lmsCommands: Command[] = [
         }
 
         try {
-          const labData = await lmsRequest(config, `/api/external/labs/${config.issueId}`);
+          const labData = await lmsRequest(config, `/api/external/labs/${config.issueId}`, ctx.syscall, ctx.abortSignal);
           if (!labData || labData.error) {
             return {
               stdout: '',
@@ -382,7 +382,7 @@ export const lmsCommands: Command[] = [
         }
 
         try {
-          const labData = await lmsRequest(config, `/api/external/labs/${config.issueId}`);
+          const labData = await lmsRequest(config, `/api/external/labs/${config.issueId}`, ctx.syscall, ctx.abortSignal);
           if (!labData || labData.error) {
             return {
               stdout: '',
@@ -448,7 +448,7 @@ export const lmsCommands: Command[] = [
         }
 
         try {
-          const res = await lmsRequest(config, `/api/external/projects/${config.projectId}`, 'PUT', {
+          const res = await lmsRequest(config, `/api/external/projects/${config.projectId}`, ctx.syscall, ctx.abortSignal, 'PUT', {
             logic: mainFile.content,
             source: `Earendel WebOS 暂存 (${mainFile.name})`,
           });
@@ -544,7 +544,7 @@ export const lmsCommands: Command[] = [
             report_content: `通过 Earendel WebOS 终端自动评分提交 (得分: ${testOutcome.score})`,
           };
 
-          const res = await lmsRequest(config, `/api/external/labs/${config.issueId}/submit`, 'POST', submitPayload);
+          const res = await lmsRequest(config, `/api/external/labs/${config.issueId}/submit`, ctx.syscall, ctx.abortSignal, 'POST', submitPayload);
 
           if (!res || res.error) {
             return {
@@ -582,4 +582,3 @@ export const lmsCommands: Command[] = [
     },
   },
 ];
-

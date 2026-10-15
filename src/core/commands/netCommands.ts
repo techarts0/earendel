@@ -228,7 +228,7 @@ export const netCommands: Command[] = [
       }
 
       const { eslibNet } = await import('../eslibNet');
-      const res = await eslibNet.fetch(url);
+      const res = await eslibNet.fetch(url, { signal: ctx.abortSignal }, ctx.syscall);
 
       if (res?.ok) {
         return { stdout: res.body + '\n', stderr: '', exitCode: 0 };
@@ -248,7 +248,7 @@ export const netCommands: Command[] = [
       }
 
       const { eslibNet } = await import('../eslibNet');
-      const res = await eslibNet.fetch(url);
+      const res = await eslibNet.fetch(url, { signal: ctx.abortSignal }, ctx.syscall);
       return { stdout: (res?.body || res?.error || '') + '\n', stderr: '', exitCode: res?.ok ? 0 : 1 };
     },
   },

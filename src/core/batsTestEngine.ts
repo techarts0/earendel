@@ -190,26 +190,55 @@ export class BatsTestEngine {
       totalWeight += weight;
 
       const engine = new ShellEngine(ctx.vfs, ctx.processManager);
+      engine.callerPid = ctx.callerPid ?? 24;
+      engine.abortSignal = ctx.abortSignal;
+      engine.lang = ctx.lang;
+      for (const [key, value] of Object.entries(ctx.env)) engine.setEnv(key, value);
+      engine.setEnv('PWD', cwd);
+      engine.setEnv('status', '0');
+      engine.setEnv('output', '');
       const startTime = performance.now();
-
-      // Combine setup + helpers + test body + teardown
-      const fullExecutionScript = [
-        batsHelperLib,
-        setupBlock,
-        tc.body,
-        teardownBlock,
-      ].join('\n');
 
       let passed = true;
       let errMsg = '';
       let stdOutCombined = '';
 
       try {
-        const res = await engine.execute(fullExecutionScript);
-        stdOutCombined = res.stdout || '';
-        if (res.exitCode !== 0 || res.stderr) {
+        const helperResult = await engine.execute(batsHelperLib);
+        stdOutCombined += helperResult.stdout || '';
+        stdOutCombined += helperResult.stderr || '';
+
+        let failedStage: { name: string; result: Awaited<ReturnType<typeof engine.execute>> } | undefined;
+        if (helperResult.exitCode !== 0) {
+          failedStage = { name: 'Bats helper initialization', result: helperResult };
+        }
+        if (!failedStage && setupBlock.trim()) {
+          const setupResult = await engine.execute(setupBlock);
+          stdOutCombined += setupResult.stdout || '';
+          stdOutCombined += setupResult.stderr || '';
+          if (setupResult.exitCode !== 0) failedStage = { name: 'setup', result: setupResult };
+        }
+        if (!failedStage) {
+          const bodyResult = await engine.execute(tc.body);
+          stdOutCombined += bodyResult.stdout || '';
+          stdOutCombined += bodyResult.stderr || '';
+          if (bodyResult.exitCode !== 0) failedStage = { name: 'test body', result: bodyResult };
+        }
+
+        // Teardown always runs, but its status cannot hide a failed test body.
+        if (teardownBlock.trim()) {
+          const teardownResult = await engine.execute(teardownBlock);
+          stdOutCombined += teardownResult.stdout || '';
+          stdOutCombined += teardownResult.stderr || '';
+          if (!failedStage && teardownResult.exitCode !== 0) {
+            failedStage = { name: 'teardown', result: teardownResult };
+          }
+        }
+
+        if (failedStage) {
           passed = false;
-          errMsg = res.stderr || `Exit code ${res.exitCode}`;
+          const output = [failedStage.result.stderr, failedStage.result.stdout].filter(Boolean).join('\n').trim();
+          errMsg = `${failedStage.name} failed (exit ${failedStage.result.exitCode})${output ? `:\n${output}` : ''}`;
         }
       } catch (e: any) {
         passed = false;

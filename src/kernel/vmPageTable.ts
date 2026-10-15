@@ -12,6 +12,7 @@ export interface PageTableEntry {
 export class VMPageTable {
   public static readonly PAGE_SIZE = 4096; // 4KB Page Size
   private pageMap: Map<number, PageTableEntry> = new Map();
+  private processPages: Map<number, number> = new Map();
   private totalPhysicalFrames = 256; // 1MB Simulated RAM (256 * 4KB)
   private allocatedFrames: Set<number> = new Set();
   private pageFaultCount = 0;
@@ -67,6 +68,29 @@ export class VMPageTable {
     this.allocatedFrames.add(freeFrame);
     this.pageMap.set(virtualPageNo, entry);
     return entry;
+  }
+
+  /** Allocate a stable, process-unique user page outside the kernel identity map. */
+  public allocateProcessPage(pid: number): PageTableEntry {
+    if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('Invalid process PID');
+    const existing = this.processPages.get(pid);
+    if (existing !== undefined) return this.pageMap.get(existing)!;
+    const virtualPageNo = 0x10000 + pid;
+    const page = this.allocatePage(virtualPageNo);
+    this.processPages.set(pid, virtualPageNo);
+    return page;
+  }
+
+  /** Release pages at process exit, independently of when its zombie is reaped. */
+  public releaseProcess(pid: number): void {
+    const virtualPageNo = this.processPages.get(pid);
+    if (virtualPageNo === undefined) return;
+    const page = this.pageMap.get(virtualPageNo);
+    if (page) {
+      this.pageMap.delete(virtualPageNo);
+      this.allocatedFrames.delete(page.physicalFrameNo);
+    }
+    this.processPages.delete(pid);
   }
 
   public handlePageFault(virtualAddress: number): PageTableEntry {

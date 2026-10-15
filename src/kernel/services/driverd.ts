@@ -3,6 +3,7 @@ import { globalIPCBus } from '../ipcBus';
 import { globalFramebufferEngine } from '../../core/framebufferEngine';
 import { globalVFS } from '../../core/vfs';
 import { IPCMessage } from '../types';
+import { globalCapabilityManager } from '../capability';
 
 export class DriverDaemonService {
   public static readonly PID = 4;
@@ -22,8 +23,23 @@ export class DriverDaemonService {
 
   private aiBuffer: string = '';
 
+  private readonly deviceScopes: Record<string, string> = {
+    'DEV_WRITE_FB0': '/dev/fb0',
+    'DEV_READ_GPU0': '/dev/gpu0',
+    'DEV_READ_DSP': '/dev/dsp',
+    'DEV_WRITE_DSP': '/dev/dsp',
+    'DEV_READ_TTYUSB': '/dev/ttyUSB0',
+    'DEV_WRITE_TTYUSB': '/dev/ttyUSB0',
+    'DEV_READ_VIDEO0': '/dev/video0',
+    'DEV_READ_GPS0': '/dev/gps0',
+    'DEV_READ_NVME0N1': '/dev/nvme0n1',
+    'DEV_READ_USB': '/dev/bus/usb/001/001',
+    'DEV_READ_BT0': '/dev/bt0',
+    'DEV_GATEWAY_TUNNEL': '/dev/can0',
+  };
+
   private parseLLMConfig(): Record<string, string> {
-    const rawConf = globalVFS.readFile('/etc/llm.conf') || '';
+    const rawConf = globalVFS.readFile('/etc/llm.conf', 'root') || '';
     const config: Record<string, string> = {
       PROVIDER: 'openai',
       BASE_URL: 'https://api.openai.com/v1',
@@ -47,6 +63,10 @@ export class DriverDaemonService {
 
   private async handleIPCMessage(msg: IPCMessage): Promise<any> {
     const { action, payload } = msg;
+    const devicePath = this.deviceScopes[action];
+    if (devicePath && !globalCapabilityManager.hasCapability(msg.senderPid, 'CAP_DEVICE_IO', devicePath)) {
+      return { error: `EACCES: PID ${msg.senderPid} lacks CAP_DEVICE_IO for '${devicePath}'` };
+    }
 
     switch (action) {
       case 'DEV_READ_NULL':
@@ -70,11 +90,21 @@ export class DriverDaemonService {
         const baseUrl = (llmConfig['BASE_URL'] || 'https://api.openai.com/v1').replace(/\/+$/, '');
         const modelName = llmConfig['MODEL_NAME'] || 'gpt-4o-mini';
         const enableMock = (llmConfig['ENABLE_LOCAL_MOCK'] || 'auto').toLowerCase();
+        const networkAuthorized = globalCapabilityManager.hasCapability(msg.senderPid, 'CAP_NET_ADMIN', `${baseUrl}/chat/completions`);
 
-        // If user explicitly enabled mock, use offline engine; otherwise attempt HTTP fetch to BASE_URL
-        const shouldAttemptFetch = enableMock !== 'true' && Boolean(baseUrl);
+        // Remote model access is an external network capability. A missing grant
+        // always selects the local engine, regardless of global LLM configuration.
+        const shouldAttemptFetch = networkAuthorized && enableMock !== 'true' && Boolean(baseUrl);
 
         if (shouldAttemptFetch) {
+          const controller = new AbortController();
+          const timeout = setTimeout(() => controller.abort(new Error('LLM request timed out')), 30000);
+          const callerSignal = payload.signal instanceof AbortSignal
+            ? payload.signal
+            : payload.opts?.signal instanceof AbortSignal ? payload.opts.signal : undefined;
+          const abortFromCaller = () => controller.abort(callerSignal?.reason);
+          if (callerSignal?.aborted) abortFromCaller();
+          else callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
           try {
             const endpoint = `${baseUrl}/chat/completions`;
             const headers: Record<string, string> = {
@@ -87,6 +117,7 @@ export class DriverDaemonService {
             const httpRes = await fetch(endpoint, {
               method: 'POST',
               headers,
+              signal: controller.signal,
               body: JSON.stringify({
                 model: modelName,
                 messages: [
@@ -108,18 +139,24 @@ export class DriverDaemonService {
 
             let response = `\x1b[1;36m[Earendel AI-Native OS Core (Model: ${modelName})]\x1b[0m\n${aiText}\n`;
             this.aiBuffer = response;
-            return { response, data: response, success: true };
+            return { response, data: response, success: true, transport: 'remote' };
           } catch (err: any) {
+            if (callerSignal?.aborted) throw err;
             let response = `\x1b[1;36m[Earendel AI-Native OS Core (Model: ${modelName})]\x1b[0m\n`;
             response += `\x1b[31m[LLM Network Connection Failure]\x1b[0m Failed to connect to ${baseUrl}: ${err.message}\n`;
             this.aiBuffer = response;
-            return { response, data: response, success: true };
+            return { response, data: response, success: false, transport: 'remote-fallback', error: err.message };
+          } finally {
+            clearTimeout(timeout);
+            callerSignal?.removeEventListener('abort', abortFromCaller);
           }
         }
 
         // Native System Fallback Engine (Default Offline Mode)
         let response = `\x1b[1;36m[Earendel AI-Native OS Core Inference Engine (Syscall #25)]\x1b[0m\n`;
-        response += `\x1b[33m[Notice: /etc/llm.conf API_KEY is default. Using Native Offline Engine]\x1b[0m\n`;
+        response += networkAuthorized
+          ? `\x1b[33m[Notice: Using Native Offline Engine]\x1b[0m\n`
+          : `\x1b[33m[Notice: CAP_NET_ADMIN not granted; remote LLM access disabled. Using Native Offline Engine]\x1b[0m\n`;
         response += `\x1b[90mTarget Input Payload (${cleanPrompt.length} bytes):\x1b[0m "${cleanPrompt.length > 60 ? cleanPrompt.slice(0, 60) + '...' : cleanPrompt}"\n\n`;
 
         if (cleanPrompt.includes('/etc/passwd') || cleanPrompt.includes('root:x:0:0')) {
@@ -139,7 +176,7 @@ export class DriverDaemonService {
         }
 
         this.aiBuffer = response;
-        return { response, data: response, success: true };
+        return { response, data: response, success: true, transport: 'local' };
       }
 
       case 'DEV_WRITE_FB0':

@@ -2,6 +2,10 @@
 import { VirtualFileSystem, VFSNode } from './vfs';
 import { Language } from '../i18n/translations';
 import type { ProcessManager } from './processManager';
+import type { SyscallNo, SyscallResult } from '../kernel/types';
+import type { SkillPermissionGrant } from './skillParser';
+
+export type ProcessSyscall = (sysNo: SyscallNo, ...args: any[]) => Promise<SyscallResult>;
 
 export interface ExecutionContext {
   vfs: VirtualFileSystem;
@@ -10,6 +14,12 @@ export interface ExecutionContext {
   args: string[];
   pipeInput?: string;
   processManager: ProcessManager;
+  /** Kernel identity used for permission-checked syscalls made by this command. */
+  callerPid?: number;
+  /** Syscall entry bound by the parent ShellEngine to this process identity. */
+  syscall: ProcessSyscall;
+  /** Optional cancellation inherited by asynchronous operations in this process. */
+  abortSignal?: AbortSignal;
   shellEngine?: any;
   history?: string[];
 }
@@ -21,10 +31,10 @@ export interface ExecutionResult {
   streamed?: boolean;
   openNano?: { path: string; content: string; user?: string };
   openVi?: { path: string; content: string; user?: string };
-  openHarnessTui?: { path: string; content: string };
-  openHarnessDag?: { path: string };
+  openHarnessTui?: { path: string; content: string; permissionGrant?: SkillPermissionGrant };
+  openHarnessDag?: { path: string; permissionGrant?: SkillPermissionGrant };
   loginPrompt?: { username: string };
-  sudoPrompt?: { username: string; commandLine: string };
+  sudoPrompt?: { username: string; commandLine: string; targetUser?: string };
   passwdPrompt?: { username: string; step: 'current' | 'new' | 'confirm'; newPass?: string };
   interactiveInput?: {
     command: string;

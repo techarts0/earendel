@@ -52,7 +52,7 @@ export class McpClientManager {
     return tools;
   }
 
-  public async callTool(serverName: string, toolName: string, args: Record<string, any>): Promise<any> {
+  public async callTool(serverName: string, toolName: string, args: Record<string, any>, abortSignal?: AbortSignal): Promise<any> {
     this.loadConfig();
     const server = this.config.mcpServers?.[serverName];
     if (!server) {
@@ -64,39 +64,34 @@ export class McpClientManager {
       try {
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 8000);
+        const abortFromCaller = () => controller.abort(abortSignal?.reason);
+        if (abortSignal?.aborted) abortFromCaller();
+        else abortSignal?.addEventListener('abort', abortFromCaller, { once: true });
 
-        const response = await fetch(server.url, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          signal: controller.signal,
-          body: JSON.stringify({
-            jsonrpc: '2.0',
-            id: Math.floor(Math.random() * 100000),
-            method: 'tools/call',
-            params: {
-              name: toolName,
-              arguments: args,
-            },
-          }),
-        });
-        clearTimeout(timeoutId);
-
-        if (!response.ok) {
-          throw new Error(`HTTP Error ${response.status}: ${response.statusText}`);
+        try {
+          const response = await fetch(server.url, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            signal: controller.signal,
+            body: JSON.stringify({
+              jsonrpc: '2.0',
+              id: Math.floor(Math.random() * 100000),
+              method: 'tools/call',
+              params: { name: toolName, arguments: args },
+            }),
+          });
+          if (!response.ok) {
+            throw new Error(`HTTP Error ${response.status}: ${response.statusText}`);
+          }
+          const resJson = await response.json();
+          return resJson.result || resJson;
+        } finally {
+          clearTimeout(timeoutId);
+          abortSignal?.removeEventListener('abort', abortFromCaller);
         }
-
-        const resJson = await response.json();
-        return resJson.result || resJson;
       } catch (e: any) {
-        // Fallback for sandboxed or offline environment
-        return {
-          content: [
-            {
-              type: 'text',
-              text: `[MCP Client Execution] Calling '${toolName}' on '${serverName}' with args: ${JSON.stringify(args)} -> Success (Sandbox Fallback)`,
-            },
-          ],
-        };
+        if (abortSignal?.aborted) throw e;
+        throw new Error(`MCP request to '${serverName}' failed: ${e?.message || String(e)}`);
       }
     }
 

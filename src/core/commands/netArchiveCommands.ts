@@ -1,7 +1,6 @@
 import { Command } from '../types';
 import { resolveHostToIp, queryDoHDns } from './netCommands';
 import { globalFirewallEngine } from '../firewallEngine';
-import { syscall } from '../../kernel/syscall';
 import { SyscallNo } from '../../kernel/types';
 
 export const netArchiveCommands: Command[] = [
@@ -162,7 +161,7 @@ export const netArchiveCommands: Command[] = [
       let fetchedResponse: Response | null = null;
       let bodyText = '';
       const { eslibNet } = await import('../eslibNet');
-      const response = await eslibNet.fetch(rawUrl, { method, headers: customHeaders, body: bodyData });
+      const response = await eslibNet.fetch(rawUrl, { method, headers: customHeaders, body: bodyData, signal: ctx.abortSignal }, ctx.syscall);
       if (!response?.ok) return { stdout: '', stderr: `curl: (7) ${response?.error || response?.statusText || 'Network request failed'}\n`, exitCode: 7 };
       bodyText = response.body || '';
       fetchedResponse = { status: response.status, statusText: response.statusText, headers: new Headers(response.headers || []) } as Response;
@@ -187,7 +186,7 @@ export const netArchiveCommands: Command[] = [
       }
 
       if (outFile) {
-        await syscall(SyscallNo.SYS_WRITE, outFile, bodyText);
+        await ctx.syscall(SyscallNo.SYS_WRITE, outFile, bodyText);
         const feedback = silent ? '' : `\x1b[32m[curl]\x1b[0m Transferred ${bodyText.length} bytes -> Saved to \x1b[1;36m${outFile}\x1b[0m\n`;
         return { stdout: feedback, stderr: '', exitCode: 0 };
       }
@@ -235,7 +234,7 @@ export const netArchiveCommands: Command[] = [
       let parsedUrl: URL;
       try { parsedUrl = new URL(rawUrl); } catch { return { stdout: '', stderr: `wget: invalid URL '${rawUrl}'\n`, exitCode: 1 }; }
       const host = parsedUrl.hostname;
-      const fileName = parsedUrl.pathname.split('/').filter(Boolean).pop() || 'index.html';
+      const fileName = outFile || parsedUrl.pathname.split('/').filter(Boolean).pop() || 'index.html';
       const ip = resolveHostToIp(host);
 
       let bodyText = '';
@@ -245,13 +244,13 @@ export const netArchiveCommands: Command[] = [
       const firewallDecision = globalFirewallEngine.evaluate({ port: requestPort, protocol: 'tcp', target: 'OUTPUT' });
       if (firewallDecision !== 'ALLOW') return { stdout: '', stderr: `wget: connection blocked by simulated firewall on port ${requestPort}\n`, exitCode: 4 };
       const { eslibNet } = await import('../eslibNet');
-      const response = await eslibNet.fetch(rawUrl);
+      const response = await eslibNet.fetch(rawUrl, { signal: ctx.abortSignal }, ctx.syscall);
       if (!response?.ok) return { stdout: '', stderr: `wget: ${response?.error || response?.statusText || 'Network request failed'}\n`, exitCode: 4 };
       contentType = (response.headers || []).find(([key]: [string, string]) => key.toLowerCase() === 'content-type')?.[1] || contentType;
       bodyText = response.body || '';
 
       // POSIX System Call SYS_WRITE -> vfsd IPC
-      await syscall(SyscallNo.SYS_WRITE, fileName, bodyText);
+      await ctx.syscall(SyscallNo.SYS_WRITE, fileName, bodyText);
 
       const sizeBytes = bodyText.length;
       const sizeKB = (sizeBytes / 1024).toFixed(1);

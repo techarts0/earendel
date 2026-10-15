@@ -3,6 +3,7 @@ import { globalIPCBus } from '../ipcBus';
 import { IPCMessage } from '../types';
 import { globalFirewallEngine } from '../../core/firewallEngine';
 import { simulatedResolve } from '../../core/networkSimulation';
+import { globalCapabilityManager } from '../capability';
 
 export class NetworkDaemon {
   private activeSockets: Map<string, WebSocket | RTCPeerConnection> = new Map();
@@ -13,6 +14,16 @@ export class NetworkDaemon {
 
   private initService() {
     globalIPCBus.registerService('netd', 9, async (msg: IPCMessage) => {
+      const resource = typeof msg.payload?.url === 'string'
+        ? msg.payload.url
+        : typeof msg.payload?.hostname === 'string'
+          ? msg.payload.hostname
+          : msg.payload?.port !== undefined
+            ? `port:${msg.payload.port}`
+            : undefined;
+      if (!globalCapabilityManager.hasCapability(msg.senderPid, 'CAP_NET_ADMIN', resource)) {
+        return { error: `EACCES: PID ${msg.senderPid} lacks CAP_NET_ADMIN${resource ? ` for '${resource}'` : ''}` };
+      }
       switch (msg.action) {
         case 'SYS_NET_FETCH':
           return await this.handleFetch(msg.payload);
@@ -28,7 +39,7 @@ export class NetworkDaemon {
     });
   }
 
-  private async handleFetch(payload: { url: string; method?: string; headers?: Record<string, string>; body?: any }) {
+  private async handleFetch(payload: { url: string; method?: string; headers?: Record<string, string>; body?: any; signal?: AbortSignal }) {
     let { url, method = 'GET', headers = {}, body } = payload;
     if (!url) {
       return { status: 0, statusText: 'Bad URL', ok: false, body: '', error: 'URL is required' };
@@ -55,12 +66,18 @@ export class NetworkDaemon {
       return { status: 0, statusText: decision === 'REJECT' ? 'Connection refused' : 'Network unreachable', ok: false, body: '', error: `Blocked by simulated firewall (${decision})` };
     }
 
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(new Error('Network request timed out')), 10000);
+    const callerSignal = payload.signal instanceof AbortSignal ? payload.signal : undefined;
+    const abortFromCaller = () => controller.abort(callerSignal?.reason);
+    if (callerSignal?.aborted) abortFromCaller();
+    else callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
     try {
       const response = await fetch(url, {
         method: methodUpper,
         headers,
         body: body ? (typeof body === 'string' ? body : JSON.stringify(body)) : undefined,
-        signal: AbortSignal.timeout(10000),
+        signal: controller.signal,
         // A followed redirect could reach a different port after the firewall check.
         redirect: 'error',
       });
@@ -81,6 +98,9 @@ export class NetworkDaemon {
         body: '',
         error: err.message,
       };
+    } finally {
+      clearTimeout(timeout);
+      callerSignal?.removeEventListener('abort', abortFromCaller);
     }
   }
 

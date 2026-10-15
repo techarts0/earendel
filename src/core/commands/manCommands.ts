@@ -22,7 +22,7 @@ export const manCommands: Command[] = [
             msg += `\x1b[33m⚠️  [Warning: /etc/llm.conf is unconfigured or missing a valid API_KEY]\x1b[0m\n` +
               `   • Status: Running in \x1b[1mBuilt-in Offline Mode\x1b[0m (local POSIX heuristic rules)\n` +
               `   • Action: To enable live cloud LLM reasoning, configure /etc/llm.conf:\n` +
-              `             \x1b[1;32mvi /etc/llm.conf\x1b[0m (specify API_KEY, BASE_URL, MODEL_NAME)\n\n`;
+              `             \x1b[1;32msudo vi /etc/llm.conf\x1b[0m (specify API_KEY, BASE_URL, MODEL_NAME)\n\n`;
           } else {
             msg += `\x1b[32m✔ Cloud LLM Active:\x1b[0m Connected to ${llm.provider} (${llm.model}) via /etc/llm.conf\n\n`;
           }
@@ -59,7 +59,7 @@ export const manCommands: Command[] = [
             `  API Key Status:  ${keyStatusStr}\n`;
 
           if (!llm.configured) {
-            out += `\n\x1b[33m💡 Setup Tip:\x1b[0m Run '\x1b[1;32mvi /etc/llm.conf\x1b[0m' to set your API_KEY for live cloud LLM reasoning.\n`;
+            out += `\n\x1b[33m💡 Setup Tip:\x1b[0m Run '\x1b[1;32msudo vi /etc/llm.conf\x1b[0m' to set your API_KEY for live cloud LLM reasoning.\n`;
           }
 
           out += `\nCommands:\n  man agent on     Enable tutor\n  man agent off    Disable tutor\n  man agent <cmd>  Interactive manual guide\n`;
@@ -139,4 +139,3 @@ export const manCommands: Command[] = [
     },
   },
 ];
-

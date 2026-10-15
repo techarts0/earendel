@@ -135,17 +135,20 @@ export class CronEngine {
   private async executeCronJob(job: CronJobEntry) {
     let childPid: number | undefined;
     try {
-      const { syscall } = await import('../kernel/syscall');
+      const { syscallAs } = await import('../kernel/syscall');
       const { SyscallNo } = await import('../kernel/types');
-      const forkRes = await syscall(SyscallNo.SYS_FORK, `cron: ${job.command}`, '/home/hello');
+      const { ShellEngine } = await import('./shellEngine');
+      const forkRes = await syscallAs(24, SyscallNo.SYS_FORK, `cron: ${job.command}`, '/home/hello');
       if (forkRes.code === 0 && typeof forkRes.data === 'number') {
         childPid = forkRes.data;
       } else {
         console.error(`[cron] could not register process for job (${job.rawLine}):`, forkRes.error || forkRes.code);
+        return;
       }
 
-      const { globalShellEngine } = await import('./shellEngine');
-      const result = await globalShellEngine.execute(job.command);
+      const jobShell = new ShellEngine();
+      jobShell.callerPid = childPid;
+      const result = await jobShell.execute(job.command);
       job.lastRunTimestamp = Date.now();
       if (result.exitCode !== 0 || result.stderr) {
         console.error(`[cron] job failed (${job.rawLine}): ${result.stderr || `exit ${result.exitCode}`}`);
@@ -155,9 +158,10 @@ export class CronEngine {
     } finally {
       if (childPid !== undefined) {
         try {
-          const { syscall } = await import('../kernel/syscall');
+          const { syscallAs } = await import('../kernel/syscall');
           const { SyscallNo } = await import('../kernel/types');
-          await syscall(SyscallNo.SYS_EXIT, childPid);
+          await syscallAs(childPid, SyscallNo.SYS_EXIT, 0);
+          await syscallAs(24, SyscallNo.SYS_WAITPID, childPid);
         } catch (e) {
           console.error(`[cron] could not reap process ${childPid}:`, e);
         }

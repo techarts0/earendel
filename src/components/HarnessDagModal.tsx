@@ -1,35 +1,49 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Network, CheckCircle2, AlertCircle, RefreshCw, Cpu, X, Play, Code, ArrowRight } from 'lucide-react';
 import { globalHarnessEngine, HarnessState } from '../core/harnessEngine';
 import { resolveSkillTarget } from '../core/skillParser';
 import { globalVFS } from '../core/vfs';
 import { globalProcessManager } from '../core/processManager';
+import { syscallAs } from '../kernel/syscall';
+import type { SkillPermissionGrant } from '../core/skillParser';
 
 interface HarnessDagModalProps {
   isOpen: boolean;
   onClose: () => void;
   skillFilePath?: string;
+  permissionGrant?: SkillPermissionGrant;
 }
 
-export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClose, skillFilePath = '/skills/git-commit-helper/skill.md' }) => {
+export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClose, skillFilePath = '/skills/git-commit-helper/skill.md', permissionGrant }) => {
   const [currentState, setCurrentState] = useState<HarnessState>(HarnessState.IDLE);
   const [lastActiveState, setLastActiveState] = useState<HarnessState>(HarnessState.PARSE);
   const [logs, setLogs] = useState<string[]>([]);
   const [isExecuting, setIsExecuting] = useState(false);
+  const executionController = useRef<AbortController | null>(null);
 
   useEffect(() => {
     if (isOpen) {
       setCurrentState(HarnessState.IDLE);
       setLastActiveState(HarnessState.PARSE);
       setLogs([]);
+    } else {
+      executionController.current?.abort(new Error('Skill cancelled by user'));
+      executionController.current = null;
     }
   }, [isOpen, skillFilePath]);
+
+  useEffect(() => () => {
+    executionController.current?.abort(new Error('Skill window closed'));
+    executionController.current = null;
+  }, []);
 
   if (!isOpen) return null;
 
   const handleRunDag = async () => {
     setIsExecuting(true);
     setLogs([`[DAG Engine] Loading Target Skill File: ${skillFilePath}...`]);
+    const controller = new AbortController();
+    executionController.current = controller;
 
     const vfs = globalVFS;
     let fileContent = '';
@@ -44,6 +58,7 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
         `[PARSE ERROR] ${skillFilePath}: ${err.message}`,
       ]);
       setIsExecuting(false);
+      if (executionController.current === controller) executionController.current = null;
       return;
     }
 
@@ -55,6 +70,7 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
         `[PARSE ERROR] ${skillFilePath}: File is empty or does not exist. Execution aborted at PARSE step.`,
       ]);
       setIsExecuting(false);
+      if (executionController.current === controller) executionController.current = null;
       return;
     }
 
@@ -68,6 +84,9 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
           args: [],
           pipeInput: '',
           processManager: globalProcessManager,
+          callerPid: 24,
+          syscall: (sysNo, ...sysArgs) => syscallAs(24, sysNo, ...sysArgs),
+          abortSignal: controller.signal,
         },
         (state, log) => {
           setCurrentState(state);
@@ -75,12 +94,15 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
             setLastActiveState(state);
           }
           if (log) setLogs((prev) => [...prev, `[FSM:${state}] ${log.replace(/\x1b\[[0-9;]*m/g, '')}`]);
-        }
+        },
+        undefined,
+        permissionGrant
       );
     } catch (err: any) {
       setCurrentState(HarnessState.ERROR);
       setLogs((prev) => [...prev, `[DAG Error] ${err.message}`]);
     } finally {
+      if (executionController.current === controller) executionController.current = null;
       setIsExecuting(false);
     }
   };
@@ -206,7 +228,10 @@ export const HarnessDagModal: React.FC<HarnessDagModalProps> = ({ isOpen, onClos
               Run DAG
             </button>
             <button
-              onClick={onClose}
+              onClick={() => {
+                executionController.current?.abort(new Error('Skill cancelled by user'));
+                onClose();
+              }}
               style={{
                 background: 'transparent',
                 border: 'none',

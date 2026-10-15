@@ -42,7 +42,7 @@ export interface FileDescriptor {
   fd: number;
   path: string;
   offset: number;
-  flags: 'r' | 'w' | 'rw' | 'a';
+  flags: 'r' | 'w' | 'a' | 'r+' | 'w+' | 'a+' | 'rw';
 }
 
 export interface ProcessControlBlock {
@@ -58,6 +58,7 @@ export interface ProcessControlBlock {
   cwd: string;
   fds?: Map<number, FileDescriptor>; // File Descriptor table
   pendingSignals?: Signal[];
+  exitCode?: number;
   ipcPort?: string;
   isKernelDaemon?: boolean;
 }

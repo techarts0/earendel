@@ -103,10 +103,10 @@ class ThemeManager {
   private currentThemeName: string = 'default';
 
   constructor() {
-    const saved = localStorage.getItem('earendel_theme');
-    if (saved && THEME_PRESETS[saved]) {
-      this.currentThemeName = saved;
-    }
+    try {
+      const saved = globalThis.localStorage?.getItem('earendel_theme');
+      if (saved && THEME_PRESETS[saved]) this.currentThemeName = saved;
+    } catch { /* Storage can be disabled by browser privacy settings. */ }
   }
 
   public getCurrentThemeName(): string {
@@ -120,8 +120,8 @@ class ThemeManager {
   public setTheme(name: string): boolean {
     if (!THEME_PRESETS[name]) return false;
     this.currentThemeName = name;
-    localStorage.setItem('earendel_theme', name);
-    window.dispatchEvent(new CustomEvent('earendel:theme-changed', { detail: name }));
+    try { globalThis.localStorage?.setItem('earendel_theme', name); } catch { /* Theme still applies for this session. */ }
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent('earendel:theme-changed', { detail: name }));
     return true;
   }
 }

@@ -6,12 +6,13 @@ import { HarnessTuiModal } from './components/HarnessTuiModal';
 import { CheatSheetModal } from './components/CheatSheetModal';
 import { FramebufferModal } from './components/FramebufferModal';
 import { HarnessDagModal } from './components/HarnessDagModal';
+import type { SkillPermissionGrant } from './core/skillParser';
 
 export function App() {
   const [nanoModal, setNanoModal] = useState<{ path: string; content: string; user?: string } | null>(null);
   const [viModal, setViModal] = useState<{ path: string; content: string; user?: string } | null>(null);
-  const [harnessTuiModal, setHarnessTuiModal] = useState<{ path: string; content: string } | null>(null);
-  const [dagModalData, setDagModalData] = useState<{ path: string } | null>(null);
+  const [harnessTuiModal, setHarnessTuiModal] = useState<{ path: string; content: string; permissionGrant?: SkillPermissionGrant } | null>(null);
+  const [dagModalData, setDagModalData] = useState<{ path: string; permissionGrant?: SkillPermissionGrant } | null>(null);
   const [showCheatModal, setShowCheatModal] = useState(false);
   const [showDagModal, setShowDagModal] = useState(false);
   const [tmuxSplit, setTmuxSplit] = useState<'none' | 'v' | 'h'>('none');
@@ -82,6 +83,7 @@ export function App() {
       <HarnessDagModal
         isOpen={showDagModal}
         skillFilePath={dagModalData?.path || '/skills/sys-doctor/skill.md'}
+        permissionGrant={dagModalData?.permissionGrant}
         onClose={() => setShowDagModal(false)}
       />
 
@@ -110,6 +112,7 @@ export function App() {
         <HarnessTuiModal
           filePath={harnessTuiModal.path}
           initialContent={harnessTuiModal.content}
+          permissionGrant={harnessTuiModal.permissionGrant}
           onClose={() => setHarnessTuiModal(null)}
         />
       )}

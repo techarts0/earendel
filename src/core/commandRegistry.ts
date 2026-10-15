@@ -29,7 +29,7 @@ export class CommandRegistry {
 
   // Register a new Linux command plugin or executable binary
   public syncAllSymbolsToVFS(targetVFS?: any): void {
-    const vfs = targetVFS || (typeof window !== 'undefined' && (window as any).globalVFS ? (window as any).globalVFS : null);
+    const vfs = targetVFS || null;
     if (!vfs) return;
 
     // Ensure /usr/bin directory exists
@@ -51,18 +51,10 @@ export class CommandRegistry {
     }
   }
 
-  private syncTimer: any = null;
-
   public register(cmd: Command): void {
     this.commands.set(cmd.name, cmd);
     if (cmd.aliases) {
       cmd.aliases.forEach((alias) => this.commands.set(alias, cmd));
-    }
-    if (!this.syncTimer) {
-      this.syncTimer = setTimeout(() => {
-        this.syncTimer = null;
-        this.syncAllSymbolsToVFS();
-      }, 50);
     }
   }
 

@@ -39,7 +39,7 @@ export const mcpCommand: Command = {
 
       try {
         const parsedArgs = JSON.parse(jsonArgsStr);
-        const res = await globalMcpClientManager.callTool(serverName, toolName, parsedArgs);
+        const res = await globalMcpClientManager.callTool(serverName, toolName, parsedArgs, ctx.abortSignal);
         return { stdout: JSON.stringify(res, null, 2) + '\n', stderr: '', exitCode: 0 };
       } catch (e: any) {
         return { stdout: '', stderr: `mcp: Call failed: ${e.message}\n`, exitCode: 1 };

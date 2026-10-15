@@ -1,8 +1,10 @@
 // Behavioral File System Commands for Earendel
 import { Command, ExecutionContext, ExecutionResult } from '../types';
 import { VFSNode } from '../vfs';
-import { syscall } from '../../kernel/syscall';
 import { SyscallNo } from '../../kernel/types';
+
+const syscallForContext = (ctx: ExecutionContext, sysNo: SyscallNo, ...args: any[]) =>
+  ctx.syscall(sysNo, ...args);
 
 // Helper for POSIX option parsing
 function parseFlags(args: string[]) {
@@ -83,19 +85,19 @@ export const fileCommands: Command[] = [
 
       for (let pIdx = 0; pIdx < targetPaths.length; pIdx++) {
         const pathArg = targetPaths[pIdx];
-        const openRes = await syscall(SyscallNo.SYS_OPEN, pathArg, 0);
-        await syscall(SyscallNo.SYS_STAT, pathArg);
+        const openRes = await syscallForContext(ctx, SyscallNo.SYS_OPEN, pathArg, 0);
+        await syscallForContext(ctx, SyscallNo.SYS_STAT, pathArg);
 
         const targetNode = ctx.vfs.getNodeByPath(pathArg);
         if (!targetNode) {
-          if (openRes.data !== undefined) await syscall(SyscallNo.SYS_CLOSE, openRes.data);
+          if (openRes.data !== undefined) await syscallForContext(ctx, SyscallNo.SYS_CLOSE, openRes.data);
           totalStderr += `ls: cannot access '${pathArg}': No such file or directory\n`;
           exitCode = 2;
           continue;
         }
 
         if (openRes.data !== undefined) {
-          await syscall(SyscallNo.SYS_CLOSE, openRes.data);
+          await syscallForContext(ctx, SyscallNo.SYS_CLOSE, openRes.data);
         }
 
         if (targetNode.type === 'file' || directorySelf) {
@@ -266,7 +268,7 @@ export const fileCommands: Command[] = [
 
       for (const dirName of positional) {
         if (dirName === customMode) continue;
-        await syscall(SyscallNo.SYS_STAT, dirName);
+        await syscallForContext(ctx, SyscallNo.SYS_STAT, dirName);
         const existingNode = ctx.vfs.getNodeByPath(dirName);
         if (existingNode && !pFlag) {
           stderr += `mkdir: cannot create directory '${dirName}': File exists\n`;
@@ -329,7 +331,7 @@ export const fileCommands: Command[] = [
         const existing = ctx.vfs.readFile(filename, user);
         if (existing === null) {
           if (!noCreate) {
-            await syscall(SyscallNo.SYS_WRITE, filename, '');
+            await syscallForContext(ctx, SyscallNo.SYS_WRITE, filename, '');
             const node = ctx.vfs.getNodeByPath(filename);
             if (node) node.updatedAt = timestamp;
           }
@@ -493,7 +495,7 @@ export const fileCommands: Command[] = [
         }
 
         const oldPerms = node.permissions;
-        const ok = ctx.vfs.chmod(target, mode, recursive);
+        const ok = ctx.vfs.chmod(target, mode, recursive, ctx.env['USER'] || 'hello');
         if (!ok) {
           if (!silent) {
             totalStderr += `chmod: changing permissions of '${target}': Operation not permitted\n`;

@@ -1,4 +1,7 @@
 import { ProcessControlBlock, TaskState } from './types';
+import { globalIPCBus } from './ipcBus';
+import { globalCapabilityManager } from './capability';
+import { globalVMPageTable } from './vmPageTable';
 
 export type SchedPolicy = 'CFS' | 'RR' | 'FIFO' | 'PRIORITY';
 
@@ -16,6 +19,7 @@ export class TaskScheduler {
   private currentPolicy: SchedPolicy = 'CFS';
   private timeQuantumMs: number = 50;
   private processSwitches: Map<number, number> = new Map();
+  private childWaiters = new Map<number, { parentPid: number; resolve: (result: { status?: number; error?: string }) => void }>();
 
   constructor() {
     this.initKernelProcess();
@@ -166,9 +170,43 @@ export class TaskScheduler {
       cwd: '/',
       isKernelDaemon: true,
     });
+
+    this.createProcess({
+      pid: 10,
+      ppid: 1,
+      name: '[harnessd]',
+      user: 'root',
+      state: 'RUNNING',
+      startTime: new Date(),
+      vszKB: 24000,
+      rssKB: 10000,
+      cpuUsagePercent: 0.1,
+      cwd: '/',
+      isKernelDaemon: true,
+    });
+
+    // Legacy terminal syscall identity retained until all callers carry process IDs.
+    this.createProcess({
+      pid: 24,
+      ppid: 1,
+      name: '/bin/bash (terminal compatibility principal)',
+      user: 'hello',
+      state: 'RUNNING',
+      startTime: new Date(),
+      vszKB: 24000,
+      rssKB: 6000,
+      cpuUsagePercent: 0.1,
+      cwd: '/home/hello',
+    });
   }
 
   public createProcess(pcb: ProcessControlBlock): ProcessControlBlock {
+    if (!Number.isSafeInteger(pcb.pid) || pcb.pid <= 0 || !Number.isSafeInteger(pcb.ppid) || pcb.ppid < 0) {
+      throw new Error('TaskScheduler: PID and PPID must be valid non-negative safe integers');
+    }
+    if (this.pcbTable.has(pcb.pid)) {
+      throw new Error(`TaskScheduler: PID ${pcb.pid} is already allocated`);
+    }
     if (!pcb.fds || pcb.fds.size === 0) {
       pcb.fds = new Map([
         [0, { fd: 0, path: '/dev/stdin', offset: 0, flags: 'r' }],
@@ -178,11 +216,25 @@ export class TaskScheduler {
     }
     this.pcbTable.set(pcb.pid, pcb);
     this.processSwitches.set(pcb.pid, 1);
+    globalIPCBus.registerProcess(pcb.pid);
     return pcb;
   }
 
   public getProcess(pid: number): ProcessControlBlock | null {
     return this.pcbTable.get(pid) || null;
+  }
+
+  /** Returns true only when target is the caller or belongs to its process tree. */
+  public isProcessInCallerTree(callerPid: number, targetPid: number): boolean {
+    if (!Number.isSafeInteger(callerPid) || !Number.isSafeInteger(targetPid)) return false;
+    let current = this.getProcess(targetPid);
+    const visited = new Set<number>();
+    while (current && !visited.has(current.pid)) {
+      if (current.pid === callerPid) return true;
+      visited.add(current.pid);
+      current = this.getProcess(current.ppid);
+    }
+    return false;
   }
 
   public getAllProcesses(): ProcessControlBlock[] {
@@ -200,11 +252,71 @@ export class TaskScheduler {
     return true;
   }
 
+  /** POSIX-style wait for one direct child; reaping is atomic with notification. */
+  public waitForChild(parentPid: number, childPid: number): Promise<{ status?: number; error?: string }> {
+    const child = this.pcbTable.get(childPid);
+    if (!child || child.ppid !== parentPid) {
+      return Promise.resolve({ error: 'ECHILD: No such child process' });
+    }
+    if (child.state === 'ZOMBIE') {
+      const status = child.exitCode ?? 0;
+      this.reapProcess(childPid);
+      return Promise.resolve({ status });
+    }
+    if (this.childWaiters.has(childPid)) {
+      return Promise.resolve({ error: 'ECHILD: Child already has a waiter' });
+    }
+    return new Promise((resolve) => this.childWaiters.set(childPid, { parentPid, resolve }));
+  }
+
+  private notifyChildWaiter(pcb: ProcessControlBlock): void {
+    const waiter = this.childWaiters.get(pcb.pid);
+    if (!waiter || waiter.parentPid !== pcb.ppid) return;
+    this.childWaiters.delete(pcb.pid);
+    const status = pcb.exitCode ?? 0;
+    this.reapProcess(pcb.pid);
+    waiter.resolve({ status });
+  }
+
   public terminateProcess(pid: number): boolean {
+    if (!this.exitProcess(pid, 1)) return false;
+    this.reapProcess(pid);
+    return true;
+  }
+
+  /** Mark an exited process waitable while revoking its live authority. */
+  public exitProcess(pid: number, exitCode = 0): boolean {
     const pcb = this.pcbTable.get(pid);
-    if (!pcb || pcb.isKernelDaemon) return false;
+    if (!pcb || pcb.isKernelDaemon || pcb.state === 'ZOMBIE') return false;
     pcb.state = 'ZOMBIE';
+    pcb.exitCode = Number.isInteger(exitCode) ? exitCode : 1;
+    globalIPCBus.unregisterProcess(pid);
+    globalCapabilityManager.clearCapabilities(pid);
+    globalVMPageTable.releaseProcess(pid);
+    this.notifyChildWaiter(pcb);
+    // Init owns adopted children and reaps them when they exit, even though the
+    // simulated PID 1 does not execute a userspace wait loop.
+    if (pcb.ppid === 1) this.reapProcess(pid);
+    for (const [childPid, child] of this.pcbTable) {
+      if (child.ppid !== pid) continue;
+      child.ppid = 1;
+      // PID 1 is the simulated init process and reaps already-exited orphans.
+      if (child.state === 'ZOMBIE') this.reapProcess(childPid);
+    }
+    for (const [childPid, waiter] of this.childWaiters) {
+      if (waiter.parentPid !== pid) continue;
+      this.childWaiters.delete(childPid);
+      waiter.resolve({ error: 'ECHILD: Parent process exited' });
+    }
+    return true;
+  }
+
+  /** Remove a zombie after its parent has consumed the exit status. */
+  public reapProcess(pid: number): boolean {
+    const pcb = this.pcbTable.get(pid);
+    if (!pcb || pcb.state !== 'ZOMBIE' || pcb.isKernelDaemon) return false;
     this.pcbTable.delete(pid);
+    this.processSwitches.delete(pid);
     return true;
   }
 }

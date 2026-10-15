@@ -10,6 +10,10 @@ export const nodeCommands: Command[] = [
     execute: async (ctx) => {
       const targetFile = ctx.args.find((a) => !a.startsWith('-'));
 
+      if (ctx.args.includes('--version') || ctx.args.includes('-v')) {
+        return { stdout: 'v18.17.1\n', stderr: '', exitCode: 0 };
+      }
+
       if (!targetFile) {
         return {
           stdout: `Welcome to Node.js v18.17.1.\nType ".help" for more information.\n> \x1b[32m[Use "node script.js" to run ES6+ JavaScript files]\x1b[0m\n`,
@@ -19,7 +23,7 @@ export const nodeCommands: Command[] = [
       }
 
       const node = ctx.vfs.getNodeByPath(targetFile);
-      if (!node || node.type !== 'file') {
+      if (!node || node.type !== 'file' || !ctx.vfs.checkPermission(node, 'r', ctx.env['USER'] || 'hello')) {
         return { stdout: '', stderr: `node: internal/modules/cjs/loader: No such file: ${targetFile}\n`, exitCode: 1 };
       }
 

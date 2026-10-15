@@ -7,7 +7,7 @@ export const waylanddCommand: Command = {
   description: 'query Earendel-Wayland Display Compositor status (PID 7)',
   category: 'sys',
   execute: async (ctx): Promise<ExecutionResult> => {
-    const res = await globalIPCBus.sendIPC(7, 'waylandd', 'SYS_WAYLAND_LIST_SURFACES', {});
+    const res = await globalIPCBus.sendIPC(globalIPCBus.getProcessEndpoint(24), 'waylandd', 'SYS_WAYLAND_LIST_SURFACES', {});
     const surfaces = res.surfaces || [];
 
     let out = `\x1b[36m[Earendel-Wayland Display Compositor Server (PID 7)]\x1b[0m\n`;
@@ -33,7 +33,7 @@ export const openCommand: Command = {
   execute: async (ctx): Promise<ExecutionResult> => {
     const pathArg = ctx.args[0] || '/home/hello';
 
-    await globalIPCBus.sendIPC(7, 'waylandd', 'SYS_WAYLAND_CREATE_SURFACE', {
+    await globalIPCBus.sendIPC(globalIPCBus.getProcessEndpoint(24), 'waylandd', 'SYS_WAYLAND_CREATE_SURFACE', {
       title: `Earendel Surface: ${pathArg}`,
       width: 800,
       height: 550,

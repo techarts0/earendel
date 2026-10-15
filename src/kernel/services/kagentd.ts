@@ -1,6 +1,6 @@
 // Earendel Microkernel Self-Healing Agent Daemon (kagentd, PID 5)
 import { AgentAction, AgentObservation, IKernelAgent, globalKernelAgentManager } from '../agentFramework';
-import { syscall } from '../syscall';
+import { syscallAs } from '../syscall';
 import { SyscallNo } from '../types';
 
 export class KAgentDaemon implements IKernelAgent {
@@ -24,7 +24,7 @@ export class KAgentDaemon implements IKernelAgent {
 
     // Call SYS_INFER for AI-Native microkernel crash reasoning
     const prompt = `System Crash Event Detected (${obs.event}): ${payloadStr}. Analyze root cause and suggest microkernel repair strategy.`;
-    const inferRes = await syscall(SyscallNo.SYS_INFER, prompt);
+    const inferRes = await syscallAs(5, SyscallNo.SYS_INFER, prompt);
     const aiDiagnosis = inferRes.data || 'Process Segfault analyzed: NULL pointer dereference.';
 
     return {

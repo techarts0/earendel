@@ -11,12 +11,14 @@ import { Language } from '../i18n/translations';
 import { globalSoundEngine } from '../core/soundEngine';
 import { globalThemeManager, THEME_PRESETS } from '../core/themeManager';
 import { highlightCommandLine } from '../core/syntaxHighlighter';
+import type { SkillPermissionGrant } from '../core/skillParser';
+import type { ExecutionResult } from '../core/types';
 
 interface TerminalProps {
   onOpenNano?: (opts: { path: string; content: string; user?: string }) => void;
   onOpenVi?: (opts: { path: string; content: string; user?: string }) => void;
-  onOpenHarnessTui?: (opts: { path: string; content: string }) => void;
-  onOpenHarnessDag?: (opts: { path: string }) => void;
+  onOpenHarnessTui?: (opts: { path: string; content: string; permissionGrant?: SkillPermissionGrant }) => void;
+  onOpenHarnessDag?: (opts: { path: string; permissionGrant?: SkillPermissionGrant }) => void;
   onOpenCheat?: () => void;
   onSplitTmux?: (type: 'v' | 'h' | 'exit') => void;
   skipBootScreen?: boolean;
@@ -30,9 +32,11 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
   const [lang, setLang] = useState<Language>('en');
 
   const shellEngineRef = useRef<ShellEngine>(new ShellEngine(globalVFS, globalProcessManager));
+  const activeCommandControllerRef = useRef<AbortController | null>(null);
   const pendingLoginUserRef = useRef<string | null>(null);
   const isInitialBootLoginRef = useRef<boolean>(true);
-  const pendingSudoCmdRef = useRef<{ username: string; commandLine: string } | null>(null);
+  const pendingSudoCmdRef = useRef<{ username: string; commandLine: string; targetUser?: string } | null>(null);
+  const rootShellPreviousUserRef = useRef<string | null>(null);
   const pendingPasswdRef = useRef<{ username: string; step: 'current' | 'new' | 'confirm'; newPass?: string } | null>(null);
   const pendingInteractiveInputRef = useRef<{
     command: string;
@@ -45,6 +49,39 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
   } | null>(null);
   const historyIndexRef = useRef<number>(-1);
   const pendingReadLineRef = useRef<((line: string) => void) | null>(null);
+  const seededPasswordPlaceholder = '$6$earendel$salt$earendel_hash';
+  const runShellCommand = async (commandLine: string, scriptArgs: string[] = [], pipeInput?: string): Promise<ExecutionResult> => {
+    if (activeCommandControllerRef.current) {
+      return { stdout: '', stderr: 'A command is already running in this terminal.\n', exitCode: 125 };
+    }
+    const controller = new AbortController();
+    activeCommandControllerRef.current = controller;
+    shellEngineRef.current.abortSignal = controller.signal;
+    try {
+      return await shellEngineRef.current.execute(commandLine, scriptArgs, pipeInput);
+    } catch (error) {
+      if (controller.signal.aborted) return { stdout: '', stderr: '', exitCode: 130 };
+      throw error;
+    } finally {
+      if (activeCommandControllerRef.current === controller) {
+        activeCommandControllerRef.current = null;
+        shellEngineRef.current.abortSignal = undefined;
+      }
+    }
+  };
+  const verifyAccountPassword = (username: string, candidate: string): boolean => {
+    // Login is a trusted system service: /etc/shadow is intentionally unreadable
+    // to the interactive user, so credential verification must use root access.
+    const shadowContent = globalVFS.readFile('/etc/shadow', 'root') ?? '';
+    const line = shadowContent.split('\n').find((entry) => entry.startsWith(`${username}:`));
+    if (!line) return false;
+    const storedPassword = line.split(':')[1] ?? '';
+    if (!storedPassword || storedPassword === '!' || storedPassword === '*') return false;
+    // The VFS ships with a documented demo credential. Once changed, it no longer
+    // grants access unless it exactly matches the saved password.
+    return candidate === storedPassword
+      || (storedPassword === seededPasswordPlaceholder && candidate === '123456');
+  };
 
   const promptStr = () => {
     const pwd = globalVFS.getPwd();
@@ -68,7 +105,17 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
   useEffect(() => {
     shellEngineRef.current.lang = lang;
     if (typeof window !== 'undefined') {
-      (window as any).globalShellEngine = shellEngineRef.current;
+      const existingDescriptor = Object.getOwnPropertyDescriptor(window, 'globalShellEngine');
+      if (!existingDescriptor || existingDescriptor.configurable) {
+        const readOnlySession = Object.freeze({
+          getEnv: (key: string) => shellEngineRef.current.getEnv(key),
+        });
+        Object.defineProperty(window, 'globalShellEngine', {
+          configurable: false,
+          enumerable: false,
+          get: () => readOnlySession,
+        });
+      }
     }
   }, [lang]);
 
@@ -126,7 +173,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
       safeFit();
       // Ensure all executable binary symbols are synchronized under /usr/bin/
       registerAllCommands();
-      globalCommandRegistry.syncAllSymbolsToVFS();
+      globalCommandRegistry.syncAllSymbolsToVFS(globalVFS);
     }, 100);
 
     const showUbuntuWelcome = () => {
@@ -156,6 +203,10 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
         }
         return;
       }
+
+      // Do not let a second command replace the active cancellation controller.
+      // Interactive `read` is the one exception: it must continue accepting input.
+      if (activeCommandControllerRef.current && !pendingReadLineRef.current && key !== '\x03') return;
 
       // Hotkey Ctrl+Shift+V (Paste)
       if (key === '\x16') {
@@ -194,6 +245,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
         }
 
         if (key === '\x03') {
+          activeCommandControllerRef.current?.abort(new Error('Command interrupted by Ctrl+C'));
           term.writeln('^C');
           inputBufferRef.current = '';
           const resolver = pendingReadLineRef.current;
@@ -302,7 +354,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
 
             if (session.pipelineNext) {
               // Pipe content to next command in pipeline (e.g. sudo tee /var/log/nginx/access.log)
-              const res = await shellEngineRef.current.execute(session.pipelineNext, [], content);
+              const res = await runShellCommand(session.pipelineNext, [], content);
               if (res.stdout) {
                 term.write(res.stdout.replace(/\n/g, '\r\n'));
               }
@@ -353,10 +405,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
 
           if (step === 'current') {
             // Check current password
-            const shadowContent = globalVFS.readFile('/etc/shadow') ?? '';
-            const userShadowLine = shadowContent.split('\n').find((l) => l.startsWith(`${username}:`));
-            const expectedPass = userShadowLine ? userShadowLine.split(':')[1] : '123456';
-            const isPassValid = enteredPassword === '123456' || enteredPassword === expectedPass || (enteredPassword === '123456' && expectedPass.startsWith('$6$'));
+            const isPassValid = verifyAccountPassword(username, enteredPassword);
 
             if (!isPassValid) {
               pendingPasswdRef.current = null;
@@ -393,7 +442,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
             }
 
             // Save new password to /etc/shadow
-            const shadowContent = globalVFS.readFile('/etc/shadow') ?? '';
+            const shadowContent = globalVFS.readFile('/etc/shadow', 'root') ?? '';
             const lines = shadowContent.split('\n');
             let updated = false;
             const newLines = lines.map((line) => {
@@ -408,7 +457,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
             if (!updated) {
               newLines.push(`${username}:${newPass}:19000:0:99999:7:::`);
             }
-            globalVFS.writeFile('/etc/shadow', newLines.join('\n'));
+            globalVFS.writeFile('/etc/shadow', newLines.join('\n'), 'root');
 
             term.writeln('\x1b[32mpasswd: password updated successfully\x1b[0m\r\n');
             term.write(promptStr());
@@ -418,31 +467,48 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
 
         // Sudo password verification
         if (pendingSudoCmdRef.current) {
-          const { username, commandLine } = pendingSudoCmdRef.current;
+          const { username, commandLine, targetUser } = pendingSudoCmdRef.current;
           pendingSudoCmdRef.current = null;
           const enteredPassword = cmd;
 
-          const shadowContent = globalVFS.readFile('/etc/shadow') ?? '';
-          const userShadowLine = shadowContent.split('\n').find((l) => l.startsWith(`${username}:`));
-          const expectedPass = userShadowLine ? userShadowLine.split(':')[1] : '123456';
-
-          if (enteredPassword !== expectedPass && enteredPassword !== '123456') {
+          if (!verifyAccountPassword(username, enteredPassword)) {
             term.writeln('\x1b[31msudo: 1 incorrect password attempt\x1b[0m\r\n');
             term.write(promptStr());
             return;
           }
 
-          // Elevate temporarily to root to run command
+          // Elevate only after the account password has been verified.
+          if (commandLine === '__EAR_ENDEL_SUDO_ROOT_SHELL__') {
+            rootShellPreviousUserRef.current = username;
+            const sessionUser = targetUser || 'root';
+            const home = sessionUser === 'root' ? '/root' : `/home/${sessionUser}`;
+            shellEngineRef.current.setAuthenticatedUser(sessionUser);
+            shellEngineRef.current.setEnv('HOME', home);
+            globalVFS.mkdir(home, true);
+            globalVFS.changeDirectory(home, sessionUser);
+            shellEngineRef.current.setEnv('PWD', globalVFS.getPwd());
+            term.writeln(`Switched to ${sessionUser} shell. Type exit to leave it.\r\n`);
+            term.write(promptStr());
+            return;
+          }
+
           const prevUser = shellEngineRef.current.getEnv('USER');
-          shellEngineRef.current.setEnv('USER', 'root');
-          const res = await shellEngineRef.current.execute(commandLine);
-          shellEngineRef.current.setEnv('USER', prevUser);
+          const executionUser = targetUser || 'root';
+          shellEngineRef.current.setAuthenticatedUser(executionUser);
+          let res: ExecutionResult;
+          try {
+            res = await runShellCommand(commandLine);
+          } finally {
+            // A failed command must never leave the interactive PID with the
+            // temporary root capability set.
+            shellEngineRef.current.setAuthenticatedUser(prevUser);
+          }
 
           if (res.openNano && onOpenNano) {
-            onOpenNano({ ...res.openNano, user: 'root' });
+            onOpenNano({ ...res.openNano, user: executionUser });
           }
           if (res.openVi && onOpenVi) {
-            onOpenVi({ ...res.openVi, user: 'root' });
+            onOpenVi({ ...res.openVi, user: executionUser });
           }
           if (res.openHarnessTui && onOpenHarnessTui) {
             onOpenHarnessTui(res.openHarnessTui);
@@ -466,10 +532,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
           pendingLoginUserRef.current = null;
           const enteredPassword = cmd;
 
-          const shadowContent = globalVFS.readFile('/etc/shadow') ?? '';
-          const userShadowLine = shadowContent.split('\n').find((l) => l.startsWith(`${targetUser}:`));
-          const expectedPass = userShadowLine ? userShadowLine.split(':')[1] : '123456';
-          const isPassValid = enteredPassword === '123456' || enteredPassword === expectedPass || (enteredPassword === '123456' && expectedPass.startsWith('$6$'));
+          const isPassValid = verifyAccountPassword(targetUser, enteredPassword);
 
           if (!isPassValid) {
             term.writeln('\x1b[31mLogin incorrect\x1b[0m\r\n');
@@ -481,7 +544,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
             return;
           }
 
-          shellEngineRef.current.setEnv('USER', targetUser);
+          shellEngineRef.current.setAuthenticatedUser(targetUser);
           const home = targetUser === 'root' ? '/root' : `/home/${targetUser}`;
           shellEngineRef.current.setEnv('HOME', home);
           globalVFS.mkdir(home, true);
@@ -499,13 +562,25 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
         }
 
         if (cmd) {
+          if (cmd === 'exit' && rootShellPreviousUserRef.current) {
+            const previousUser = rootShellPreviousUserRef.current;
+            rootShellPreviousUserRef.current = null;
+            const home = previousUser === 'root' ? '/root' : `/home/${previousUser}`;
+            shellEngineRef.current.setAuthenticatedUser(previousUser);
+            shellEngineRef.current.setEnv('HOME', home);
+            globalVFS.changeDirectory(home, previousUser);
+            shellEngineRef.current.setEnv('PWD', globalVFS.getPwd());
+            term.writeln('Left root shell.\r\n');
+            term.write(promptStr());
+            return;
+          }
           if (cmd === 'lang zh' || cmd === 'lang en') {
             const targetLang = cmd === 'lang zh' ? 'zh' : 'en';
             setLang(targetLang);
             shellEngineRef.current.lang = targetLang;
             term.writeln(`Language set to ${targetLang === 'zh' ? '中文' : 'English'}.\r\n`);
           } else {
-            const res = await shellEngineRef.current.execute(cmd);
+            const res = await runShellCommand(cmd);
             if (!res.streamed && res.stdout) {
               term.write(res.stdout.replace(/\n/g, '\r\n'));
             }
@@ -532,7 +607,7 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
             }
 
             if (res.logout) {
-              shellEngineRef.current.setEnv('USER', 'hello');
+              shellEngineRef.current.setAuthenticatedUser('hello');
               shellEngineRef.current.setEnv('HOME', '/home/hello');
               globalVFS.changeDirectory('/home/hello');
               isInitialBootLoginRef.current = true;
@@ -671,6 +746,13 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
           return;
         }
       } else if (key === '\x03') {
+        const activeCommand = activeCommandControllerRef.current;
+        if (activeCommand) {
+          if (!activeCommand.signal.aborted) activeCommand.abort(new Error('Command interrupted by Ctrl+C'));
+          inputBufferRef.current = '';
+          term.writeln('^C');
+          return;
+        }
         inputBufferRef.current = '';
         pendingLoginUserRef.current = null;
         pendingSudoCmdRef.current = null;
@@ -821,6 +903,9 @@ export const Terminal: React.FC<TerminalProps> = ({ onOpenNano, onOpenVi, onOpen
     window.addEventListener('earendel:theme-changed', handleThemeChange);
 
     return () => {
+      activeCommandControllerRef.current?.abort(new Error('Terminal unmounted'));
+      activeCommandControllerRef.current = null;
+      shellEngineRef.current.abortSignal = undefined;
       clearTimeout(timer);
       disposable.dispose();
       resizeObserver.disconnect();

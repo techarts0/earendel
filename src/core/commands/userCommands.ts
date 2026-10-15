@@ -48,7 +48,7 @@ export const userCommands: Command[] = [
         }
 
         const oldOwnerGroup = `${node.owner}:${node.group}`;
-        const ok = ctx.vfs.chown(target, ownerGroup, recursive);
+        const ok = ctx.vfs.chown(target, ownerGroup, recursive, ctx.env['USER'] || 'hello');
         if (!ok) {
           if (!silent) {
             totalStderr += `chown: changing ownership of '${target}': Operation not permitted\n`;
@@ -117,7 +117,7 @@ export const userCommands: Command[] = [
         }
 
         const oldGroup = node.group;
-        const ok = ctx.vfs.chown(target, `:${targetGroup}`, recursive);
+        const ok = ctx.vfs.chown(target, `:${targetGroup}`, recursive, ctx.env['USER'] || 'hello');
         if (!ok) {
           if (!silent) {
             totalStderr += `chgrp: changing group of '${target}': Operation not permitted\n`;
@@ -402,46 +402,31 @@ export const userCommands: Command[] = [
     name: 'su',
     description: 'Change user ID or become superuser (supports su -, su <user>, -c <cmd>)',
     category: 'sys',
-    execute: async (ctx) => {
-      let isLoginEnv = false;
-      let commandToRun: string | null = null;
+    execute: (ctx) => {
       let targetUser = 'root';
-
+      let commandLine: string | undefined;
       for (let i = 0; i < ctx.args.length; i++) {
         const arg = ctx.args[i];
-        if (arg === '-' || arg === '-l' || arg === '--login') {
-          isLoginEnv = true;
-        } else if (arg === '-c' && ctx.args[i + 1]) {
-          commandToRun = ctx.args.slice(i + 1).join(' ');
+        if (arg === '-c' && ctx.args[i + 1]) {
+          commandLine = ctx.args.slice(i + 1).join(' ');
           break;
-        } else if (!arg.startsWith('-')) {
-          targetUser = arg;
         }
+        if (!arg.startsWith('-')) targetUser = arg;
       }
-
-      const passwdContent = ctx.vfs.readFile('/etc/passwd') ?? '';
-      if (targetUser !== 'root' && !passwdContent.includes(`${targetUser}:`)) {
+      const passwd = ctx.vfs.readFile('/etc/passwd') ?? '';
+      if (targetUser !== 'root' && !passwd.split('\n').some((line) => line.startsWith(`${targetUser}:`))) {
         return { stdout: '', stderr: `su: user ${targetUser} does not exist\n`, exitCode: 1 };
       }
-
-      if (commandToRun) {
-        const parts = commandToRun.split(/\s+/);
-        const subCmd = parts[0];
-        const subArgs = parts.slice(1);
-        const { globalCommandRegistry } = await import('../commandRegistry');
-        return await globalCommandRegistry.execute(subCmd, { ...ctx, args: subArgs, env: { ...ctx.env, USER: targetUser } });
-      }
-
-      ctx.env['USER'] = targetUser;
-      ctx.env['HOME'] = targetUser === 'root' ? '/root' : `/home/${targetUser}`;
-      if (isLoginEnv) {
-        ctx.env['LOGNAME'] = targetUser;
-        ctx.env['SHELL'] = '/bin/bash';
-      }
-      ctx.vfs.changeDirectory(ctx.env['HOME'], targetUser);
-      ctx.env['PWD'] = ctx.vfs.getPwd();
-
-      return { stdout: `Switched to user ${targetUser}.\n`, stderr: '', exitCode: 0 };
+      return {
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+        sudoPrompt: {
+          username: ctx.env['USER'] || 'hello',
+          commandLine: commandLine ?? '__EAR_ENDEL_SUDO_ROOT_SHELL__',
+          targetUser,
+        },
+      };
     },
   },
   {
@@ -636,28 +621,15 @@ export const userCommands: Command[] = [
 
       const currentUser = ctx.env['USER'] || 'hello';
 
-      if (ctx.args[0] === '-i' || ctx.args[0] === '-s') {
-        ctx.env['USER'] = 'root';
-        ctx.env['HOME'] = '/root';
-        ctx.vfs.changeDirectory('/root', 'root');
-        ctx.env['PWD'] = ctx.vfs.getPwd();
-        return { stdout: 'Switched to root shell.\n', stderr: '', exitCode: 0 };
-      }
-
-      // If already root, execute directly
-      if (currentUser === 'root') {
-        const subCmd = ctx.args[0];
-        const subArgs = ctx.args.slice(1);
-        const { globalCommandRegistry } = await import('../commandRegistry');
-        return await globalCommandRegistry.execute(subCmd, { ...ctx, args: subArgs });
-      }
-
-      // Return sudoPrompt for password entry
+      const interactiveRootShell = ctx.args[0] === '-i' || ctx.args[0] === '-s';
+      const commandLine = interactiveRootShell ? '__EAR_ENDEL_SUDO_ROOT_SHELL__' : ctx.args.join(' ');
+      // Always authenticate in the terminal. USER is an ordinary shell variable and
+      // must not be sufficient to bypass sudo's password prompt.
       return {
         stdout: '',
         stderr: '',
         exitCode: 0,
-        sudoPrompt: { username: currentUser, commandLine: ctx.args.join(' ') },
+        sudoPrompt: { username: currentUser, commandLine },
       };
     },
   },
@@ -1309,4 +1281,3 @@ export const userCommands: Command[] = [
     },
   },
 ];
-

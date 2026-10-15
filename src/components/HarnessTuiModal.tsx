@@ -1,17 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { globalHarnessEngine, HarnessState } from '../core/harnessEngine';
 import { globalVFS } from '../core/vfs';
 import { globalProcessManager } from '../core/processManager';
+import { syscallAs } from '../kernel/syscall';
+import { SyscallNo } from '../kernel/types';
+import type { SkillPermissionGrant } from '../core/skillParser';
 
 interface HarnessTuiModalProps {
   filePath: string;
   initialContent: string;
+  permissionGrant?: SkillPermissionGrant;
   onClose: () => void;
 }
 
 export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
   filePath,
   initialContent,
+  permissionGrant,
   onClose,
 }) => {
   const [content] = useState(initialContent);
@@ -22,6 +27,17 @@ export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
   ]);
   const [isRunning, setIsRunning] = useState(false);
   const [retryCount, setRetryCount] = useState(0);
+  const executionController = useRef<AbortController | null>(null);
+
+  useEffect(() => () => {
+    executionController.current?.abort(new Error('Skill window closed'));
+    executionController.current = null;
+  }, []);
+
+  const handleClose = () => {
+    executionController.current?.abort(new Error('Skill cancelled by user'));
+    onClose();
+  };
 
   const addLog = (msg: string) => {
     setLogs((prev) => [...prev, msg]);
@@ -34,6 +50,8 @@ export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
     setLastActiveState(HarnessState.PARSE);
     setRetryCount(0);
     addLog(`[Action] Starting Auto Execution...`);
+    const controller = new AbortController();
+    executionController.current = controller;
 
     const ctx = {
       vfs: globalVFS,
@@ -41,6 +59,9 @@ export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
       lang: 'en' as const,
       args: [],
       processManager: globalProcessManager,
+      callerPid: 24,
+      syscall: (sysNo: SyscallNo, ...sysArgs: any[]) => syscallAs(24, sysNo, ...sysArgs),
+      abortSignal: controller.signal,
     };
 
     try {
@@ -54,7 +75,7 @@ export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
         }
         const cleanMsg = msg.replace(/\x1b\[[0-9;]*m/g, '').trim();
         if (cleanMsg) addLog(`[${state}] ${cleanMsg}`);
-      });
+      }, undefined, permissionGrant);
       if (res.exitCode === 0) {
         setCurrentState(HarnessState.SUCCESS);
         addLog(`[Success] Skill execution finished successfully!`);
@@ -66,6 +87,7 @@ export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
       setCurrentState(HarnessState.ERROR);
       addLog(`[Crash] Harness Engine crash: ${err.message}`);
     } finally {
+      if (executionController.current === controller) executionController.current = null;
       setIsRunning(false);
     }
   };
@@ -134,7 +156,7 @@ export const HarnessTuiModal: React.FC<HarnessTuiModalProps> = ({
 
           <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
             <button
-              onClick={onClose}
+              onClick={handleClose}
               style={{
                 background: '#e11d48',
                 border: 'none',

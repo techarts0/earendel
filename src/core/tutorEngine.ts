@@ -44,8 +44,10 @@ export class TutorEngine {
     hasKey: boolean;
     notice?: string;
   } {
-    const targetVFS = vfs && typeof vfs.readFile === 'function' ? vfs : globalVFS;
-    const rawConf = targetVFS?.readFile('/etc/llm.conf') || '';
+    // This trusted status helper reports configuration metadata, never the key.
+    // The credential file itself is root-only and must not be read via a caller VFS.
+    void vfs;
+    const rawConf = globalVFS.readFile('/etc/llm.conf', 'root') || '';
 
     const config: Record<string, string> = {};
     rawConf.split('\n').forEach((line: string) => {
@@ -68,7 +70,7 @@ export class TutorEngine {
       model: config['MODEL_NAME'] || 'gpt-4o-mini',
       hasKey: hasValidKey,
       notice: !isConfigured
-        ? `[Notice: /etc/llm.conf unconfigured. Operating in Built-in Offline Mode. Configure /etc/llm.conf to enable cloud LLM.]`
+        ? `[Notice: /etc/llm.conf unconfigured. Operating in Built-in Offline Mode. Use sudo to configure /etc/llm.conf to enable cloud LLM.]`
         : undefined,
     };
   }
@@ -253,7 +255,7 @@ export class TutorEngine {
 
     if (!llm.configured) {
       out += `\n\x1b[33m[Notice: /etc/llm.conf API_KEY unconfigured. Using built-in POSIX reference library.]\x1b[0m\n`;
-      out += `\x1b[90mRun 'vi /etc/llm.conf' to configure an API_KEY for live cloud LLM reasoning.\x1b[0m\n`;
+      out += `\x1b[90mRun 'sudo vi /etc/llm.conf' to configure an API_KEY for live cloud LLM reasoning.\x1b[0m\n`;
     }
 
     out += `\x1b[1;35m╰────────────────────────────────────────────────────────────────────────╯\x1b[0m\n`;
@@ -378,4 +380,3 @@ export class TutorEngine {
 }
 
 export const globalTutorEngine = new TutorEngine();
-

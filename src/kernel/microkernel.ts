@@ -77,7 +77,7 @@ export class Microkernel {
 
     if (level === 'error' || level === 'panic') {
       try {
-        globalKernelAgentManager.dispatchObservation('dmesg', message, { subsystem, level });
+        globalKernelAgentManager.enqueueObservation('dmesg', message, { subsystem, level });
       } catch (_) {}
     }
   }

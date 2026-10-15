@@ -1,7 +1,6 @@
 import { ExecutionContext, ExecutionResult } from './types';
-import { syscall } from '../kernel/syscall';
+import { syscallAs } from '../kernel/syscall';
 import { SyscallNo } from '../kernel/types';
-import { globalVMPageTable } from '../kernel/vmPageTable';
 
 export class WasmRuntimeEngine {
   /**
@@ -12,9 +11,11 @@ export class WasmRuntimeEngine {
     wasmBytes: Uint8Array | ArrayBuffer,
     ctx: ExecutionContext
   ): Promise<ExecutionResult> {
-    const forkRes = await syscall(SyscallNo.SYS_FORK, 'wasm_process', '/home/hello');
-    const childPid = forkRes.data || 303;
-    globalVMPageTable.allocatePage(Math.floor(childPid / 10));
+    const forkRes = await ctx.syscall(SyscallNo.SYS_FORK, 'wasm_process', '/home/hello');
+    if (forkRes.code !== 0 || typeof forkRes.data !== 'number') {
+      return { stdout: '', stderr: `[WASI Runtime Error]: fork failed: ${forkRes.error || 'unknown error'}\n`, exitCode: 1 };
+    }
+    const childPid = forkRes.data;
 
     let stdoutBuffer = '';
     let stderrBuffer = '';
@@ -158,10 +159,12 @@ export class WasmRuntimeEngine {
         }
       }
 
-      await syscall(SyscallNo.SYS_EXIT, childPid);
+      await syscallAs(childPid, SyscallNo.SYS_EXIT, 0);
+      await ctx.syscall(SyscallNo.SYS_WAITPID, childPid);
       return { stdout: stdoutBuffer, stderr: stderrBuffer, exitCode: 0 };
     } catch (e: any) {
-      await syscall(SyscallNo.SYS_EXIT, childPid);
+      await syscallAs(childPid, SyscallNo.SYS_EXIT, 1);
+      await ctx.syscall(SyscallNo.SYS_WAITPID, childPid);
       if (e.message?.startsWith('proc_exit:')) {
         const code = parseInt(e.message.split(':')[1], 10) || 0;
         return { stdout: stdoutBuffer, stderr: stderrBuffer, exitCode: code };

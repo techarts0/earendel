@@ -2,7 +2,7 @@
 import { globalCommandRegistry } from './commandRegistry';
 import { globalHostMountEngine } from './hostMountEngine';
 import { globalTaskScheduler } from '../kernel/taskScheduler';
-import { globalIPCBus } from '../kernel/ipcBus';
+import posixProcessConformance from '../scripts/posix-process-conformance.bats?raw';
 
 export interface VFSNode {
   id: string;
@@ -40,6 +40,7 @@ export class VirtualFileSystem {
 
   private listeners: Array<() => void> = [];
   private db: IDBDatabase | null = null;
+  private initializing = true;
 
   constructor() {
     this.root = {
@@ -57,6 +58,7 @@ export class VirtualFileSystem {
 
     this.currentDirectory = this.root;
     this.initDefaultStructure();
+    this.initializing = false;
     this.initIndexedDB();
   }
 
@@ -99,8 +101,11 @@ export class VirtualFileSystem {
     this.writeFile('/dev/net/dns', '[Earendel POSIX DoH DNS Device (/dev/net/dns)]\nUsage: echo "openai.com" > /dev/net/dns\n');
     this.writeFile(
       '/etc/llm.conf',
-      '# Earendel POSIX Microkernel AI Subsystem Configuration (/etc/llm.conf)\nPROVIDER=openai\nBASE_URL=https://api.openai.com/v1\nMODEL_NAME=gpt-4o-mini\nAPI_KEY=sk-your-api-key-here\nTIMEOUT_SEC=30\nENABLE_LOCAL_MOCK=auto\n'
+      '# Earendel POSIX Microkernel AI Subsystem Configuration (/etc/llm.conf)\nPROVIDER=openai\nBASE_URL=https://api.openai.com/v1\nMODEL_NAME=gpt-4o-mini\nAPI_KEY=sk-your-api-key-here\nTIMEOUT_SEC=30\nENABLE_LOCAL_MOCK=auto\n',
+      'root'
     );
+    this.chown('/etc/llm.conf', 'root:root', false, 'root');
+    this.chmod('/etc/llm.conf', '600');
     this.writeFile(
       '/etc/mcp.conf',
       JSON.stringify({
@@ -126,6 +131,9 @@ export class VirtualFileSystem {
       '/home/hello/welcome.txt',
       '欢迎开启 Linux 星尘之旅！这是你的第一份测试文件。\n使用 cat welcome.txt 查看内容，或使用 chmod 修改本文件的权限。\n'
     );
+
+    this.mkdir('/home/hello/tests', true);
+    this.writeFile('/home/hello/tests/posix-process-conformance.bats', posixProcessConformance);
 
     this.writeFile(
       '/home/hello/demo.sh',
@@ -387,7 +395,7 @@ constraints:
 
     // Sync physical binary symbols to /usr/bin/
     try {
-      globalCommandRegistry.syncAllSymbolsToVFS();
+      globalCommandRegistry.syncAllSymbolsToVFS(this);
     } catch (e) { }
   }
 
@@ -451,7 +459,7 @@ constraints:
             }
           }
           this.notify();
-          globalCommandRegistry.syncAllSymbolsToVFS();
+          globalCommandRegistry.syncAllSymbolsToVFS(this);
 
           // Dynamically rehydrate installed package executables from restored /var/lib/dpkg/info/
           import('./pkgManager').then(({ globalPkgManager }) => {
@@ -729,85 +737,9 @@ constraints:
   writeFile(pathStr: string, content: string, currentUser = 'hello'): boolean {
     const absPath = this.resolvePath(pathStr);
     if (absPath === '/dev/null') return true;
-
-    if (absPath === '/dev/ai') {
-      globalIPCBus.sendIPC(24, 'driverd', 'DEV_WRITE_AI', { prompt: content }).then((res: any) => {
-        if (res && res.response) {
-          const aiNode = this.getNodeByPath('/dev/ai');
-          if (aiNode) aiNode.content = res.response;
-        }
-      }).catch(() => { });
-      return true;
-    }
-
-    if (absPath === '/dev/skill') {
-      // Ensure harnessEngine module is loaded and catch unhandled IPC boot errors
-      import('./harnessEngine').then(() => {
-        globalIPCBus.sendIPC(7, 'harnessd', 'DEV_WRITE_SKILL', { prompt: content }).then((res: any) => {
-          if (res && res.response) {
-            const skillNode = this.getNodeByPath('/dev/skill');
-            if (skillNode) skillNode.content = res.response;
-          }
-        }).catch(() => { });
-      }).catch(() => { });
-      return true;
-    }
-
-    if (absPath === '/dev/net/fetch') {
-      const url = content.trim();
-      import('../kernel/syscall').then(({ syscall }) => {
-        import('../kernel/types').then(({ SyscallNo }) => {
-          syscall(SyscallNo.SYS_NET_FETCH, url).then((res) => {
-            const fetchNode = this.getNodeByPath('/dev/net/fetch');
-            if (fetchNode) fetchNode.content = res.data?.body || res.error || '';
-          }).catch(() => { });
-        }).catch(() => { });
-      }).catch(() => { });
-      return true;
-    }
-
-    if (absPath === '/dev/net/dns') {
-      const hostname = content.trim();
-      import('../kernel/syscall').then(({ syscall }) => {
-        import('../kernel/types').then(({ SyscallNo }) => {
-          syscall(SyscallNo.SYS_NET_RESOLVE, hostname).then((res) => {
-            const dnsNode = this.getNodeByPath('/dev/net/dns');
-            if (dnsNode) dnsNode.content = `${hostname} -> ${res.data?.ip || '104.21.55.1'}\n`;
-          }).catch(() => { });
-        }).catch(() => { });
-      }).catch(() => { });
-      return true;
-    }
-
-    if (absPath === '/dev/ttyUSB0') {
-      import('../kernel/ipcBus').then(({ globalIPCBus }) => {
-        globalIPCBus.sendIPC(24, 'driverd', 'DEV_WRITE_TTYUSB', { data: content }).then((res) => {
-          const node = this.getNodeByPath('/dev/ttyUSB0');
-          if (node) node.content = `[Earendel HAL Web Serial UART (/dev/ttyUSB0)]\nLast Transmitted Payload (${content.length} bytes): ${content.trim()}\n`;
-        }).catch(() => {});
-      }).catch(() => {});
-      return true;
-    }
-
-    if (absPath === '/dev/dsp') {
-      import('../kernel/ipcBus').then(({ globalIPCBus }) => {
-        globalIPCBus.sendIPC(24, 'driverd', 'DEV_WRITE_DSP', { data: content }).then((res) => {
-          const node = this.getNodeByPath('/dev/dsp');
-          if (node) node.content = `[Earendel HAL Web Audio Synthesizer (/dev/dsp)]\nLast PCM Stream Output: ${content.length} bytes\n`;
-        }).catch(() => {});
-      }).catch(() => {});
-      return true;
-    }
-
-    if (absPath === '/dev/can0') {
-      import('../kernel/ipcBus').then(({ globalIPCBus }) => {
-        globalIPCBus.sendIPC(24, 'driverd', 'DEV_GATEWAY_TUNNEL', { url: content.trim() }).then((res) => {
-          const node = this.getNodeByPath('/dev/can0');
-          if (node) node.content = `[Earendel HAL Hardware Gateway CAN Bus (/dev/can0)]\nTunnel Status: ${res.tunnelStatus || 'CONNECTED'} -> ${content.trim()}\n`;
-        }).catch(() => {});
-      }).catch(() => {});
-      return true;
-    }
+    // Device side effects must pass through vfsd/driverd with the real sender
+    // endpoint. A direct VFS write has neither a process identity nor authority.
+    if (!this.initializing && absPath.startsWith('/dev/')) return false;
 
     if (globalHostMountEngine.getMatchingMount(absPath)) {
       globalHostMountEngine.writeFile(absPath, content);
@@ -948,10 +880,21 @@ constraints:
     return false;
   }
 
-  chmod(pathStr: string, mode: string, recursive: boolean = false): boolean {
+  chmod(pathStr: string, mode: string, recursive: boolean = false, currentUser?: string): boolean {
     const absPath = this.resolvePath(pathStr);
     const node = this.getNodeByPath(absPath);
     if (!node) return false;
+
+    const isValidMode = (value: string) => /^0?[0-7]{3}$/.test(value) || value.split(',').every((clause) => /^[ugoa]*[+\-=][rwx]*$/.test(clause));
+    if (!isValidMode(mode)) return false;
+    if (currentUser && currentUser !== 'root') {
+      const canChangeTree = (target: VFSNode): boolean => {
+        if (target.owner !== currentUser) return false;
+        if (!recursive || target.type !== 'directory' || !target.children) return true;
+        return Array.from(target.children.values()).every(canChangeTree);
+      };
+      if (!canChangeTree(node)) return false;
+    }
 
     const applyChmod = (targetNode: VFSNode, nodeAbsPath: string) => {
       let normalizedMode = mode;
@@ -1021,7 +964,8 @@ constraints:
     return true;
   }
 
-  chown(pathStr: string, ownerGroupStr: string, recursive: boolean = false): boolean {
+  chown(pathStr: string, ownerGroupStr: string, recursive: boolean = false, currentUser?: string): boolean {
+    if (currentUser && currentUser !== 'root') return false;
     const absPath = this.resolvePath(pathStr);
     const node = this.getNodeByPath(absPath);
     if (!node) return false;
@@ -1536,6 +1480,3 @@ constraints:
 }
 
 export const globalVFS = new VirtualFileSystem();
-if (typeof window !== 'undefined') {
-  (window as any).globalVFS = globalVFS;
-}

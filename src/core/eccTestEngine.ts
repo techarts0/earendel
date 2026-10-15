@@ -58,6 +58,19 @@ export class EccTestEngine {
       }
       const it = test;
 
+      function __deepEqual(a, b, seen = new WeakMap()) {
+        if (Object.is(a, b)) return true;
+        if (!a || !b || typeof a !== 'object' || typeof b !== 'object') return false;
+        if (Array.isArray(a) !== Array.isArray(b)) return false;
+        let partners = seen.get(a);
+        if (partners && partners.has(b)) return true;
+        if (!partners) { partners = new WeakSet(); seen.set(a, partners); }
+        partners.add(b);
+        const aKeys = Object.keys(a).sort();
+        const bKeys = Object.keys(b).sort();
+        return aKeys.length === bKeys.length && aKeys.every((key, index) => key === bKeys[index] && __deepEqual(a[key], b[key], seen));
+      }
+
       function expect(actual) {
         return {
           toBe(expected) {
@@ -66,9 +79,10 @@ export class EccTestEngine {
             }
           },
           toEqual(expected) {
-            const actualStr = JSON.stringify(actual);
-            const expectedStr = JSON.stringify(expected);
-            if (actualStr !== expectedStr) {
+            if (!__deepEqual(actual, expected)) {
+              let actualStr; let expectedStr;
+              try { actualStr = JSON.stringify(actual); } catch { actualStr = String(actual); }
+              try { expectedStr = JSON.stringify(expected); } catch { expectedStr = String(expected); }
               throw new Error(\`Expected deep equal \${expectedStr} but received \${actualStr}\`);
             }
           },
@@ -219,7 +233,7 @@ export class EccTestEngine {
           lastSuite = t.suite;
         }
 
-        const weight = t.scoreWeight || 1;
+        const weight = Number.isFinite(t.scoreWeight) && t.scoreWeight > 0 ? t.scoreWeight : 1;
         totalWeight += weight;
 
         const startTime = performance.now();

@@ -1,5 +1,5 @@
 // Earendel Pure Web Audio Sound Synthesizer Engine
-import { syscall } from '../kernel/syscall';
+import { syscallAs } from '../kernel/syscall';
 import { SyscallNo } from '../kernel/types';
 
 class SoundEngine {
@@ -7,10 +7,10 @@ class SoundEngine {
   private enabled: boolean = true;
 
   constructor() {
-    const saved = localStorage.getItem('earendel_sound');
-    if (saved !== null) {
-      this.enabled = saved === 'true';
-    }
+    try {
+      const saved = globalThis.localStorage?.getItem('earendel_sound');
+      if (saved !== null && saved !== undefined) this.enabled = saved === 'true';
+    } catch { /* Keep the default when browser storage is unavailable. */ }
   }
 
   private initCtx() {
@@ -31,7 +31,7 @@ class SoundEngine {
 
   public setEnabled(flag: boolean): void {
     this.enabled = flag;
-    localStorage.setItem('earendel_sound', flag ? 'true' : 'false');
+    try { globalThis.localStorage?.setItem('earendel_sound', flag ? 'true' : 'false'); } catch { /* Session preference remains active. */ }
   }
 
   public toggleSound(): boolean {
@@ -42,7 +42,7 @@ class SoundEngine {
   // 1. Mechanical Switch Keypress Sound
   public playKeySound() {
     if (!this.enabled) return;
-    syscall(SyscallNo.SYS_WRITE, '/dev/audio', 'sound_keypress').catch(() => {});
+    syscallAs(24, SyscallNo.SYS_WRITE, '/dev/audio', 'sound_keypress').catch(() => {});
     this.initCtx();
     if (!this.ctx) return;
 

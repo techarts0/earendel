@@ -1,18 +1,36 @@
 import { globalVFS, VirtualFileSystem } from './vfs';
 import { globalProcessManager, ProcessManager } from './processManager';
 import { globalCommandRegistry } from './commandRegistry';
-import { ExecutionContext, ExecutionResult } from './types';
+import { ExecutionContext, ExecutionResult, ProcessSyscall } from './types';
 import { Language } from '../i18n/translations';
-import { syscall } from '../kernel/syscall';
+import { syscall, syscallAs } from '../kernel/syscall';
 import { SyscallNo } from '../kernel/types';
 import './commands'; // Ensure all command plugins are auto-registered
 import { ASTNode, FlowSignal, parseShellScript, splitStatements } from './shellParser';
+import { createCapabilityVfsView } from './scopedVfs';
+import { globalCapabilityManager } from '../kernel/capability';
+import { globalTaskScheduler } from '../kernel/taskScheduler';
 
 export class ShellEngine {
   public vfs: VirtualFileSystem;
   public processManager: ProcessManager;
+  public callerPid = 24;
+  public abortSignal?: AbortSignal;
 
-  private env: Record<string, string> = {
+  private syscallFor(pid = this.callerPid): ProcessSyscall {
+    return (sysNo, ...args) => syscallAs(pid, sysNo, ...args);
+  }
+
+  private executionVfs(): VirtualFileSystem {
+    return createCapabilityVfsView(
+      this.vfs,
+      this.callerPid,
+      this.envValues['USER'] || 'hello',
+      { allowChangeDirectory: true, liveCwd: true },
+    );
+  }
+
+  private readonly envValues: Record<string, string> = {
     USER: 'hello',
     HOME: '/home/hello',
     PWD: '/home/hello',
@@ -20,6 +38,15 @@ export class ShellEngine {
     TERM: 'xterm-256color',
     PATH: '/bin:/usr/bin',
   };
+  private env: Record<string, string> = new Proxy(this.envValues, {
+    set: (target, key, value) => {
+      if (key === 'USER') return true;
+      target[String(key)] = String(value);
+      return true;
+    },
+    deleteProperty: (target, key) => key === 'USER' || Reflect.deleteProperty(target, key),
+    defineProperty: (target, key, descriptor) => key === 'USER' || Reflect.defineProperty(target, key, descriptor),
+  });
 
   private history: string[] = [];
   private aliases: Map<string, string> = new Map();
@@ -129,6 +156,15 @@ export class ShellEngine {
 
   setEnv(key: string, val: string): void {
     this.env[key] = val;
+  }
+
+  /** Change the session identity only after an authentication boundary. */
+  setAuthenticatedUser(user: string): void {
+    this.envValues['USER'] = user;
+    const process = globalTaskScheduler.getProcess(this.callerPid);
+    if (process) process.user = user;
+    if (user === 'root') globalCapabilityManager.grantDefaultCaps(this.callerPid);
+    else globalCapabilityManager.grantUserDefaults(this.callerPid, user);
   }
 
   public setArray(name: string, values: string[]): void {
@@ -357,12 +393,22 @@ export class ShellEngine {
     return result.replace(/\u0000SINGLE_(\d+)\u0000/g, (_m, index) => literals[Number(index)] || '');
   }
 
-  async execute(commandLine: string, scriptArgs: string[] = [], pipeInput?: string): Promise<ExecutionResult> {
+  async execute(
+    commandLine: string,
+    scriptArgs: string[] = [],
+    pipeInput?: string,
+    options: { skipAliasExpansion?: boolean } = {},
+  ): Promise<ExecutionResult> {
+    if (this.abortSignal?.aborted) {
+      this.lastExitCode = 130;
+      this.env['?'] = '130';
+      return { stdout: '', stderr: '', exitCode: 130 };
+    }
     const trimmed = commandLine.trim();
     if (!trimmed || (trimmed.startsWith('#') && !trimmed.includes('\n'))) {
       return { stdout: '', stderr: '', exitCode: 0 };
     }
-    const aliased = this.expandAlias(trimmed);
+    const aliased = options.skipAliasExpansion ? trimmed : this.expandAlias(trimmed);
     const arithmeticCommand = aliased.match(/^\(\((.*)\)\)$/s);
     if (arithmeticCommand) {
       const value = this.evaluateArithmeticExpression(arithmeticCommand[1], scriptArgs);
@@ -513,12 +559,15 @@ export class ShellEngine {
         if (cmdObj && cmdObj.executeStream) {
           const cmdArgs = parts.slice(1);
           const ctx: ExecutionContext = {
-            vfs: this.vfs,
+            vfs: this.executionVfs(),
             env: this.env,
             lang: this.lang,
             args: cmdArgs,
             pipeInput: inputData,
             processManager: this.processManager,
+            callerPid: this.callerPid,
+            syscall: this.syscallFor(),
+            abortSignal: this.abortSignal,
             shellEngine: this,
             history: this.history,
           };
@@ -603,6 +652,11 @@ export class ShellEngine {
     let lastExitCode = 0;
 
     for (const node of nodes) {
+      if (this.abortSignal?.aborted) {
+        this.lastExitCode = 130;
+        this.env['?'] = '130';
+        return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: 130, signal: { type: 'NONE' } };
+      }
       switch (node.type) {
         case 'COMMAND': {
           const res = await this.execute(node.line, scriptArgs, pipeInput);
@@ -637,15 +691,18 @@ export class ShellEngine {
         }
         case 'WHILE': {
           let safetyCounter = 0;
-          while (safetyCounter < 5000) {
+          while (!this.abortSignal?.aborted && safetyCounter < 5000) {
             const isTrue = await this.evaluateConditionAsync(node.condition, scriptArgs);
-            if (!isTrue) break;
+            if (!isTrue || this.abortSignal?.aborted) break;
             safetyCounter++;
 
             const res = await this.executeNodes(node.body, scriptArgs, pipeInput);
             stdoutAcc += res.stdout;
             if (res.stderr) stderrAcc += res.stderr;
             lastExitCode = res.exitCode;
+            if (this.abortSignal?.aborted) {
+              return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: 130, signal: { type: 'NONE' } };
+            }
 
             if (res.signal.type === 'BREAK') {
               if (res.signal.count <= 1) {
@@ -684,11 +741,17 @@ export class ShellEngine {
           }
 
           for (const item of expandedItems) {
+            if (this.abortSignal?.aborted) {
+              return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: 130, signal: { type: 'NONE' } };
+            }
             this.setEnv(node.variable, item);
             const res = await this.executeNodes(node.body, scriptArgs, pipeInput);
             stdoutAcc += res.stdout;
             if (res.stderr) stderrAcc += res.stderr;
             lastExitCode = res.exitCode;
+            if (this.abortSignal?.aborted) {
+              return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: 130, signal: { type: 'NONE' } };
+            }
 
             if (res.signal.type === 'BREAK') {
               if (res.signal.count <= 1) break;
@@ -707,11 +770,14 @@ export class ShellEngine {
         case 'ARITHMETIC_FOR': {
           if (node.init) await this.execute(node.init, scriptArgs);
           let safetyCounter = 0;
-          while (safetyCounter++ < 5000 && (!node.condition || this.evaluateArithmeticExpression(node.condition, scriptArgs) !== 0)) {
+          while (!this.abortSignal?.aborted && safetyCounter++ < 5000 && (!node.condition || this.evaluateArithmeticExpression(node.condition, scriptArgs) !== 0)) {
             const res = await this.executeNodes(node.body, scriptArgs, pipeInput);
             stdoutAcc += res.stdout;
             stderrAcc += res.stderr;
             lastExitCode = res.exitCode;
+            if (this.abortSignal?.aborted) {
+              return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: 130, signal: { type: 'NONE' } };
+            }
             if (res.signal.type === 'BREAK') {
               if (res.signal.count <= 1) break;
               return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: { type: 'BREAK', count: res.signal.count - 1 } };
@@ -762,6 +828,11 @@ export class ShellEngine {
           this.lastExitCode = code;
           return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: code, signal: { type: 'RETURN', exitCode: code } };
         }
+      }
+      if (this.abortSignal?.aborted) {
+        this.lastExitCode = 130;
+        this.env['?'] = '130';
+        return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: 130, signal: { type: 'NONE' } };
       }
     }
 
@@ -924,7 +995,7 @@ export class ShellEngine {
     }
 
     if (isBackground) {
-      const job = globalProcessManager.addJob(rawCmd);
+      const job = this.processManager.addJob(rawCmd);
       return {
         stdout: `[${job.jobId}] ${job.pid}\n`,
         stderr: '',
@@ -986,6 +1057,10 @@ export class ShellEngine {
 
       break;
     }
+
+    // Inline command assignments are untrusted environment data; preserve the
+    // authenticated session identity for every command and its VFS checks.
+    childEnv['USER'] = this.envValues['USER'];
 
     if (cmdIdx >= args.length) return { stdout: '', stderr: '', exitCode: 0 };
 
@@ -1070,7 +1145,10 @@ export class ShellEngine {
     if (cmdName === '/dev/ai' || cmdName === 'ai') {
       const prompt = pipeInput || cmdArgs.join(' ') || 'Status check';
       const { globalIPCBus } = await import('../kernel/ipcBus');
-      const aiRes = await globalIPCBus.sendIPC(24, 'driverd', 'DEV_WRITE_AI', { prompt });
+      const aiRes = await globalIPCBus.sendIPC(globalIPCBus.getProcessEndpoint(this.callerPid), 'driverd', 'DEV_WRITE_AI', {
+        prompt,
+        signal: this.abortSignal,
+      });
       return { stdout: (aiRes.response || aiRes.data || '') + '\n', stderr: '', exitCode: 0 };
     }
 
@@ -1078,12 +1156,15 @@ export class ShellEngine {
       const content = pipeInput || cmdArgs.join(' ');
       const { globalHarnessEngine } = await import('./harnessEngine');
       const ctx: ExecutionContext = {
-        vfs: globalVFS,
+        vfs: this.executionVfs(),
         env: childEnv,
         lang: this.lang,
         args: cmdArgs,
         pipeInput,
-        processManager: globalProcessManager,
+        processManager: this.processManager,
+        callerPid: this.callerPid,
+        syscall: this.syscallFor(),
+        abortSignal: this.abortSignal,
       };
       return await globalHarnessEngine.executeSkill(content, ctx);
     }
@@ -1091,14 +1172,14 @@ export class ShellEngine {
     if (cmdName === '/dev/net/fetch') {
       const url = pipeInput || cmdArgs.join(' ');
       const { eslibNet } = await import('./eslibNet');
-      const res = await eslibNet.fetch(url);
+      const res = await eslibNet.fetch(url, { signal: this.abortSignal }, this.syscallFor());
       return { stdout: (res?.body || res?.error || '') + '\n', stderr: '', exitCode: res?.ok ? 0 : 1 };
     }
 
     if (cmdName === '/dev/net/dns') {
       const hostname = pipeInput || cmdArgs.join(' ');
       const { eslibNet } = await import('./eslibNet');
-      const ip = await eslibNet.gethostbyname(hostname);
+      const ip = await eslibNet.gethostbyname(hostname, this.syscallFor());
       return { stdout: `${hostname} -> ${ip}\n`, stderr: '', exitCode: 0 };
     }
 
@@ -1123,20 +1204,32 @@ export class ShellEngine {
 
     // Native script / EAF binary executable path execution via POSIX fork() -> execve() -> waitpid()
     if (cmdName.startsWith('./') || cmdName.startsWith('/') || cmdName.endsWith('.sh') || cmdName.endsWith('.eaf') || cmdName.endsWith('.md')) {
-      const scriptPath = cmdName;
-      const node = globalVFS.getNodeByPath(scriptPath);
+      const activeUser = this.env['USER'] || 'hello';
+      // Resolve relative executable paths before the syscall authorization
+      // boundary. Capabilities are scoped to canonical absolute VFS paths.
+      const scriptPath = this.vfs.resolvePath(cmdName, activeUser);
+      const node = this.vfs.getNodeByPath(scriptPath);
 
       if (!node) {
         res = { stdout: '', stderr: `-bash: ${cmdName}: No such file or directory\n`, exitCode: 127 };
-      } else if (!globalVFS.isExecutable(scriptPath)) {
+      } else if (!this.vfs.isExecutable(scriptPath)) {
         res = { stdout: '', stderr: `-bash: ${cmdName}: Permission denied\n`, exitCode: 126 };
       } else {
         // POSIX Process Lifecycle: SYS_FORK -> SYS_EXECVE -> SYS_WAITPID
-        const forkRes = await syscall(SyscallNo.SYS_FORK, scriptPath, globalVFS.getPwd());
-        const childPid = forkRes.data || 401;
-        await syscall(SyscallNo.SYS_EXECVE, scriptPath, cmdArgs);
+        const invoke = this.syscallFor();
+        const forkRes = await invoke(SyscallNo.SYS_FORK, scriptPath, this.vfs.getPwd());
+        if (forkRes.code !== 0 || typeof forkRes.data !== 'number') {
+          return { stdout: '', stderr: `-bash: ${cmdName}: fork failed: ${forkRes.error || 'unknown error'}\n`, exitCode: 1 };
+        }
+        const childPid = forkRes.data;
+        const execRes = await invoke(SyscallNo.SYS_EXECVE, scriptPath, cmdArgs);
+        if (execRes.code !== 0) {
+          await this.syscallFor(childPid)(SyscallNo.SYS_EXIT, 126);
+          await invoke(SyscallNo.SYS_WAITPID, childPid);
+          return { stdout: '', stderr: `-bash: ${cmdName}: ${execRes.error || 'exec failed'}\n`, exitCode: 126 };
+        }
 
-        const content = globalVFS.readFile(scriptPath, this.env['USER'] || 'hello') ?? '';
+        const content = this.vfs.readFile(scriptPath, activeUser) ?? '';
 
         // Check for EAF Magic Header (EAF01 or EAF\x01)
         const isEaf = scriptPath.endsWith('.eaf') || (content.includes('"magic"') && content.includes('EAF'));
@@ -1145,12 +1238,15 @@ export class ShellEngine {
         if (isSkill) {
           const { globalHarnessEngine } = await import('./harnessEngine');
           const ctx: ExecutionContext = {
-            vfs: globalVFS,
+            vfs: this.executionVfs(),
             env: childEnv,
             lang: this.lang,
             args: cmdArgs,
             pipeInput,
-            processManager: globalProcessManager,
+            processManager: this.processManager,
+            callerPid: this.callerPid,
+            syscall: this.syscallFor(),
+            abortSignal: this.abortSignal,
           };
           res = await globalHarnessEngine.executeSkill(content, ctx);
         } else if (isEaf) {
@@ -1163,23 +1259,29 @@ export class ShellEngine {
               const { globalWasmEngine } = await import('./wasmRuntime');
               const wasmBytes = new TextEncoder().encode(textSection);
               const ctx: ExecutionContext = {
-                vfs: globalVFS,
+                vfs: this.executionVfs(),
                 env: childEnv,
                 lang: this.lang,
                 args: cmdArgs,
                 pipeInput,
-                processManager: globalProcessManager,
+                processManager: this.processManager,
+                callerPid: childPid,
+                syscall: this.syscallFor(childPid),
+                abortSignal: this.abortSignal,
               };
               res = await globalWasmEngine.executeWasm(wasmBytes, ctx);
             } else {
               const { globalJsEngine } = await import('./jsRuntime');
               const ctx: ExecutionContext = {
-                vfs: globalVFS,
+                vfs: this.executionVfs(),
                 env: childEnv,
                 lang: this.lang,
                 args: [scriptPath, ...cmdArgs],
                 pipeInput,
-                processManager: globalProcessManager,
+                processManager: this.processManager,
+                callerPid: childPid,
+                syscall: this.syscallFor(childPid),
+                abortSignal: this.abortSignal,
               };
               res = await globalJsEngine.executeJsBundle(textSection, ctx);
             }
@@ -1190,17 +1292,21 @@ export class ShellEngine {
           res = await this.executeControlFlow(content, [scriptPath, ...cmdArgs]);
         }
 
-        await syscall(SyscallNo.SYS_WAITPID, childPid);
+        await this.syscallFor(childPid)(SyscallNo.SYS_EXIT, res.exitCode);
+        await invoke(SyscallNo.SYS_WAITPID, childPid);
       }
     } else {
       const isBuiltin = ['cd', 'export', 'unset', 'alias', 'unalias', 'exit', 'su', 'source', '.', 'read'].includes(cmdName);
       const ctx: ExecutionContext = {
-        vfs: globalVFS,
+        vfs: this.executionVfs(),
         env: isBuiltin ? this.env : childEnv,
         lang: this.lang,
         args: cmdArgs,
         pipeInput,
-        processManager: globalProcessManager,
+        processManager: this.processManager,
+        callerPid: this.callerPid,
+        syscall: this.syscallFor(),
+        abortSignal: this.abortSignal,
         shellEngine: this,
         history: this.history,
       };
@@ -1209,14 +1315,23 @@ export class ShellEngine {
 
     if (redirectTarget && res.exitCode === 0) {
       const activeUser = childEnv['USER'] || this.env['USER'] || 'hello';
-      const resolvedTarget = globalVFS.resolvePath(redirectTarget, activeUser);
-      let existing = appendMode ? (globalVFS.readFile(resolvedTarget, activeUser) ?? '') : '';
-      const newContent = existing + res.stdout;
-      const ok = globalVFS.writeFile(resolvedTarget, newContent, activeUser);
-      if (!ok) {
+      const resolvedTarget = this.vfs.resolvePath(redirectTarget, activeUser);
+      const openRes = await this.syscallFor()(SyscallNo.SYS_OPEN, resolvedTarget, appendMode ? 'a' : 'w');
+      let writeError: string | undefined = openRes.code === 0
+        ? undefined
+        : openRes.error || 'Permission denied';
+      if (openRes.code === 0 && typeof openRes.data === 'number') {
+        try {
+          const writeRes = await this.syscallFor()(SyscallNo.SYS_WRITE, openRes.data, res.stdout);
+          if (writeRes.code !== 0) writeError = writeRes.error || 'Write failed';
+        } finally {
+          await this.syscallFor()(SyscallNo.SYS_CLOSE, openRes.data);
+        }
+      }
+      if (writeError) {
         res = {
           stdout: '',
-          stderr: `-bash: ${redirectTarget}: Permission denied\n`,
+          stderr: `-bash: ${redirectTarget}: ${writeError}\n`,
           exitCode: 1,
         };
       } else {
@@ -1369,6 +1484,3 @@ export class ShellEngine {
 }
 
 export const globalShellEngine = new ShellEngine();
-if (typeof window !== 'undefined') {
-  (window as any).globalShellEngine = globalShellEngine;
-}

@@ -1,4 +1,3 @@
-import { globalVFS } from './vfs';
 import { globalIPCBus } from '../kernel/ipcBus';
 
 export interface FramebufferConfig {
@@ -14,17 +13,6 @@ export class FramebufferEngine {
   private ctx: CanvasRenderingContext2D | null = null;
   private listeners: Array<() => void> = [];
   private isWindowOpen = false;
-
-  constructor() {
-    this.initDeviceNodes();
-  }
-
-  private initDeviceNodes() {
-    try {
-      globalVFS.writeFile('/dev/fb0', '[Earendel Framebuffer Character Device Node /dev/fb0]');
-      globalVFS.writeFile('/dev/display', '[Earendel Display Window Device Node /dev/display]');
-    } catch (e) {}
-  }
 
   public subscribe(listener: () => void) {
     this.listeners.push(listener);
@@ -56,7 +44,15 @@ export class FramebufferEngine {
   public closeWindow() {
     this.isWindowOpen = false;
     try {
-      globalIPCBus.sendIPC(24, 'waylandd', 'SYS_WAYLAND_DESTROY_SURFACE', { id: 'all' });
+      const endpoint = globalIPCBus.getProcessEndpoint(24);
+      void globalIPCBus.sendIPC(endpoint, 'waylandd', 'SYS_WAYLAND_LIST_SURFACES', {}).then((result) => {
+        const ownedIds = Array.isArray(result?.surfaces)
+          ? result.surfaces.map((surface: { id?: unknown }) => surface.id).filter((id: unknown): id is string => typeof id === 'string')
+          : [];
+        return Promise.all(ownedIds.map((id: string) =>
+          globalIPCBus.sendIPC(endpoint, 'waylandd', 'SYS_WAYLAND_DESTROY_SURFACE', { id }),
+        ));
+      }).catch(() => {});
     } catch (_) {}
     this.notify();
   }

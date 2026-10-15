@@ -2,9 +2,12 @@
 import { globalIPCBus } from '../ipcBus';
 import { IPCMessage } from '../types';
 import { globalFramebufferEngine } from '../../core/framebufferEngine';
+import { globalCapabilityManager } from '../capability';
+import { globalTaskScheduler } from '../taskScheduler';
 
 export interface WaylandSurface {
   id: string;
+  ownerPid: number;
   title: string;
   width: number;
   height: number;
@@ -38,16 +41,26 @@ export class WaylandCompositorDaemon {
 
   private async handleIPCMessage(msg: IPCMessage): Promise<any> {
     const { action, payload } = msg;
+    this.pruneExitedClients();
+    const caller = globalTaskScheduler.getProcess(msg.senderPid);
+    if (!caller || caller.state !== 'RUNNING') return { success: false, error: 'ESRCH: inactive Wayland client' };
+    const isAdmin = globalCapabilityManager.hasCapability(msg.senderPid, 'CAP_SYS_ADMIN');
+    const owns = (id: unknown): id is string => typeof id === 'string' && this.surfaces.get(id)?.ownerPid === msg.senderPid;
 
     switch (action) {
       case 'SYS_WAYLAND_CREATE_SURFACE': {
-        const id = payload?.id || `surf_${Math.random().toString(36).substring(2, 9)}`;
+        const id = `surf_${msg.senderPid}_${Math.random().toString(36).substring(2, 10)}`;
+        const dimension = (value: unknown, fallback: number) => {
+          const parsed = Number(value);
+          return Number.isFinite(parsed) ? Math.max(64, Math.min(4096, Math.floor(parsed))) : fallback;
+        };
         this.topZIndex += 1;
         const surface: WaylandSurface = {
           id,
+          ownerPid: msg.senderPid,
           title: payload?.title || 'Earendel Wayland Surface',
-          width: payload?.width || 800,
-          height: payload?.height || 600,
+          width: dimension(payload?.width, 800),
+          height: dimension(payload?.height, 600),
           x: payload?.x || 100,
           y: payload?.y || 80,
           zIndex: this.topZIndex,
@@ -67,9 +80,11 @@ export class WaylandCompositorDaemon {
         const id = payload?.id;
         let removed = false;
         if (!id || id === 'all') {
+          if (!isAdmin) return { success: false, error: 'EPERM: destroying all Wayland surfaces requires CAP_SYS_ADMIN' };
           this.surfaces.clear();
           removed = true;
         } else {
+          if (!owns(id) && !isAdmin) return { success: false, error: 'EACCES: surface belongs to another process' };
           removed = this.surfaces.delete(id);
         }
         if (this.surfaces.size === 0) {
@@ -83,6 +98,9 @@ export class WaylandCompositorDaemon {
       case 'SYS_WAYLAND_FOCUS_SURFACE': {
         const id = payload?.id;
         const surface = this.surfaces.get(id);
+        if (surface && surface.ownerPid !== msg.senderPid && !isAdmin) {
+          return { success: false, error: 'EACCES: surface belongs to another process' };
+        }
         if (surface) {
           this.topZIndex += 1;
           surface.zIndex = this.topZIndex;
@@ -93,14 +111,16 @@ export class WaylandCompositorDaemon {
       }
 
       case 'SYS_WAYLAND_LIST_SURFACES': {
+        const visibleSurfaces = Array.from(this.surfaces.values()).filter(surface => isAdmin || surface.ownerPid === msg.senderPid);
         return {
           compositor: 'Earendel Wayland Display Server 1.24.0',
-          surfaces: Array.from(this.surfaces.values()),
-          activeCount: this.surfaces.size,
+          surfaces: visibleSurfaces,
+          activeCount: visibleSurfaces.length,
         };
       }
 
       case 'SYS_WAYLAND_FLUSH_FRAMEBUFFER': {
+        if (!owns(payload?.id) && !isAdmin) return { success: false, error: 'EACCES: framebuffer surface belongs to another process' };
         try {
           if (payload?.pixels && Array.isArray(payload.pixels)) {
             globalFramebufferEngine.drawPixelBuffer(payload.pixels);
@@ -118,6 +138,20 @@ export class WaylandCompositorDaemon {
 
       default:
         return { error: `[waylandd Error] Unknown action: ${action}` };
+    }
+  }
+
+  private pruneExitedClients(): void {
+    let removedAny = false;
+    for (const [id, surface] of this.surfaces) {
+      const owner = globalTaskScheduler.getProcess(surface.ownerPid);
+      if (!owner || owner.state === 'ZOMBIE') {
+        this.surfaces.delete(id);
+        removedAny = true;
+      }
+    }
+    if (removedAny && this.surfaces.size === 0) {
+      try { globalFramebufferEngine.closeWindow(); } catch (_) {}
     }
   }
 }

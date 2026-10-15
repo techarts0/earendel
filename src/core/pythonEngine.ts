@@ -1,13 +1,16 @@
-import { syscall } from '../kernel/syscall';
 import { SyscallNo } from '../kernel/types';
-import { globalVMPageTable } from '../kernel/vmPageTable';
+import { syscallAs } from '../kernel/syscall';
+import type { ProcessSyscall } from './types';
 
 export class PythonEngine {
-  public async executeScript(codeText: string, args: string[] = []): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  public async executeScript(codeText: string, args: string[], syscall: ProcessSyscall): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     // POSIX Process Lifecycle: SYS_FORK -> allocate 4KB Page -> Execution -> SYS_EXIT
     const forkRes = await syscall(SyscallNo.SYS_FORK, 'python3', '/home/hello');
-    const childPid = forkRes.data || 301;
-    globalVMPageTable.allocatePage(Math.floor(childPid / 10));
+    if (forkRes.code !== 0 || typeof forkRes.data !== 'number') {
+      return { stdout: '', stderr: `python3: fork failed: ${forkRes.error || 'unknown error'}\n`, exitCode: 1 };
+    }
+    const childPid = forkRes.data;
+    const childSyscall: ProcessSyscall = (sysNo, ...sysArgs) => syscallAs(childPid, sysNo, ...sysArgs);
 
     let stdoutAcc = '';
     let stderrAcc = '';
@@ -82,11 +85,13 @@ export class PythonEngine {
       }
     } catch (err: any) {
       stderrAcc += `Traceback (most recent call last):\n  File "script.py", line ${i + 1}\nSyntaxError: ${err.message || 'invalid syntax'}\n`;
-      await syscall(SyscallNo.SYS_EXIT, childPid);
+      await childSyscall(SyscallNo.SYS_EXIT, 1);
+      await syscall(SyscallNo.SYS_WAITPID, childPid);
       return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: 1 };
     }
 
-    await syscall(SyscallNo.SYS_EXIT, childPid);
+    await childSyscall(SyscallNo.SYS_EXIT, 0);
+    await syscall(SyscallNo.SYS_WAITPID, childPid);
     return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: 0 };
   }
 

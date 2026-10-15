@@ -71,8 +71,11 @@ Built-in harness-skill agent architecture:
 
 - **`skill` command** — execute `.md` skill files as agent workflows
 - **`/dev/skill` character device** — programmatic agent invocation
-- Agents run as first-class OS processes with full syscall access
+- Skill manifests declare requested permissions; callers explicitly approve them on `skill` invocations
+- Manifest requests are intersected with caller approvals before Capabilities are issued; `/dev/skill` starts with no extra grants
 - Skill files are plain Markdown — human-readable, version-controllable
+
+Example: `skill /skills/report.md --grant-read=/home/hello/project --grant-write=/tmp/report --grant-tool=cat --grant-network`. Each grant is limited to the matching permission requested by the Skill manifest; omit grant flags to run with only the Harness scratchpad and safe built-ins.
 
 ### 🛠️ Toolchain
 

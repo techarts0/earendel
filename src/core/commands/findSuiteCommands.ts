@@ -207,7 +207,12 @@ export const findSuiteCommands: Command[] = [
         return true;
       };
 
+      let visitedNodes = 0;
+      const yieldToEventLoop = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
       for (const startPath of paths) {
+        if (ctx.abortSignal?.aborted) {
+          return { stdout: '', stderr: 'find: operation cancelled\n', exitCode: 130 };
+        }
         const rootNode = ctx.vfs.getNodeByPath(startPath);
         if (!rootNode) {
           stderr += `find: '${startPath}': No such file or directory\n`;
@@ -215,25 +220,36 @@ export const findSuiteCommands: Command[] = [
           continue;
         }
 
-        const walk = (node: any, currPath: string, depth: number) => {
-          if (maxDepth !== null && depth > maxDepth) return;
+        // Use an explicit stack: deeply nested VFS trees must not overflow the JS
+        // call stack. Yield periodically so an expired Skill deadline can abort a
+        // large synchronous traversal instead of leaving it running in the UI.
+        const pending: Array<{ node: any; path: string; depth: number }> = [
+          { node: rootNode, path: startPath, depth: 0 },
+        ];
+        while (pending.length > 0) {
+          if (ctx.abortSignal?.aborted) {
+            return { stdout: '', stderr: 'find: operation cancelled\n', exitCode: 130 };
+          }
+          const current = pending.pop()!;
+          if (maxDepth !== null && current.depth > maxDepth) continue;
 
-          if (matchesFilters(node, currPath, depth)) {
-            results.push(currPath);
+          if (matchesFilters(current.node, current.path, current.depth)) {
+            results.push(current.path);
           }
 
-          if (node.type === 'directory' && node.children) {
-            // Sort children alphabetically for consistent traversal
-            const childrenMap = node.children as Map<string, any>;
-            const childrenEntries: [string, any][] = Array.from(childrenMap.entries()).sort((a, b) => a[0].localeCompare(b[0]));
+          if (current.node.type === 'directory' && current.node.children) {
+            // Reverse push preserves alphabetical depth-first output order.
+            const childrenMap = current.node.children as Map<string, any>;
+            const childrenEntries: [string, any][] = Array.from(childrenMap.entries()).sort((a, b) => b[0].localeCompare(a[0]));
             for (const [childName, childNode] of childrenEntries) {
-              const nextPath = currPath === '/' ? `/${childName}` : currPath === '.' ? childName : `${currPath}/${childName}`;
-              walk(childNode, nextPath, depth + 1);
+              const nextPath = current.path === '/' ? `/${childName}` : current.path === '.' ? childName : `${current.path}/${childName}`;
+              pending.push({ node: childNode, path: nextPath, depth: current.depth + 1 });
             }
           }
-        };
 
-        walk(rootNode, startPath, 0);
+          visitedNodes++;
+          if (visitedNodes % 256 === 0) await yieldToEventLoop();
+        }
       }
 
       if (execArgs && execArgs.length > 0) {

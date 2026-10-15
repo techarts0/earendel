@@ -1,5 +1,38 @@
 // Behavioral Shell Scripting & Control Flow Commands for Earendel
 import { Command } from '../types';
+import { SyscallNo } from '../../kernel/types';
+import { syscallAs } from '../../kernel/syscall';
+import { createCapabilityVfsView } from '../scopedVfs';
+
+async function runNestedBash(ctx: any, content: string, args: string[]): Promise<any> {
+  const fork = await ctx.syscall(SyscallNo.SYS_FORK, 'bash', ctx.vfs.getPwd());
+  if (fork.code !== 0 || typeof fork.data !== 'number') {
+    return { stdout: '', stderr: `bash: fork failed: ${fork.error || 'unknown error'}\n`, exitCode: 1 };
+  }
+
+  const childPid = fork.data as number;
+  let result: any = { stdout: '', stderr: '', exitCode: 1 };
+  try {
+    const { ShellEngine } = await import('../shellEngine');
+    const childVfs = createCapabilityVfsView(ctx.vfs, childPid, ctx.env.USER || 'hello');
+    const childShell = new ShellEngine(childVfs, ctx.processManager);
+    childShell.callerPid = childPid;
+    childShell.lang = ctx.lang;
+    childShell.abortSignal = ctx.abortSignal;
+    for (const [key, value] of Object.entries(ctx.env)) childShell.setEnv(key, value as string);
+    result = await childShell.execute(content, args);
+  } catch (error: any) {
+    result = { stdout: '', stderr: `bash: ${error?.message || String(error)}\n`, exitCode: 1 };
+  } finally {
+    await syscallAs(childPid, SyscallNo.SYS_EXIT, result.exitCode);
+    await ctx.syscall(SyscallNo.SYS_WAITPID, childPid);
+  }
+  return result;
+}
+
+function quoteShellArgument(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
 
 // POSIX test / [ Expression Evaluator
 function evaluateTestExpr(tokens: string[], ctx: any): boolean {
@@ -79,6 +112,24 @@ function evaluateTestExpr(tokens: string[], ctx: any): boolean {
 }
 
 export const shellControlCommands: Command[] = [
+  {
+    name: 'run',
+    description: 'Bats helper: execute a command and capture its status and combined output',
+    category: 'sys',
+    execute: async (ctx) => {
+      if (!ctx.args.length) return { stdout: '', stderr: 'run: command required\n', exitCode: 2 };
+      if (!ctx.shellEngine || typeof ctx.shellEngine.setEnv !== 'function') {
+        return { stdout: '', stderr: 'run: no active shell context\n', exitCode: 2 };
+      }
+      const commandLine = ctx.args.map(quoteShellArgument).join(' ');
+      const result = await runNestedBash(ctx, commandLine, []);
+      const output = `${result.stdout || ''}${result.stderr || ''}`.replace(/\n$/, '');
+      ctx.shellEngine.setEnv('status', String(result.exitCode));
+      ctx.shellEngine.setEnv('output', output);
+      ctx.shellEngine.setArray?.('lines', output ? output.split(/\r?\n/) : []);
+      return { stdout: '', stderr: '', exitCode: result.exitCode };
+    },
+  },
   {
     name: 'test',
     aliases: ['['],
@@ -174,8 +225,10 @@ export const shellControlCommands: Command[] = [
       const content = ctx.vfs.readFile(resolvedPath, activeUser);
       if (content === null) return { stdout: '', stderr: `source: ${scriptPath}: file not found\n`, exitCode: 1 };
 
-      const { globalShellEngine } = await import('../shellEngine');
-      return await globalShellEngine.execute(content, [resolvedPath, ...ctx.args.slice(1)]);
+      if (ctx.shellEngine && ctx.shellEngine.callerPid === ctx.callerPid) {
+        return await ctx.shellEngine.execute(content, [resolvedPath, ...ctx.args.slice(1)]);
+      }
+      return await runNestedBash(ctx, content, [resolvedPath, ...ctx.args.slice(1)]);
     },
   },
   {
@@ -202,8 +255,7 @@ export const shellControlCommands: Command[] = [
 
       if (ctx.args[0] === '-c') {
         const cmdStr = ctx.args.slice(1).join(' ');
-        const { globalShellEngine } = await import('../shellEngine');
-        return await globalShellEngine.execute(cmdStr);
+        return await runNestedBash(ctx, cmdStr, []);
       }
 
       // Execute script file
@@ -215,8 +267,7 @@ export const shellControlCommands: Command[] = [
         return { stdout: '', stderr: `bash: ${scriptPath}: No such file or directory\n`, exitCode: 127 };
       }
 
-      const { globalShellEngine } = await import('../shellEngine');
-      return await globalShellEngine.execute(content, [resolvedPath, ...ctx.args.slice(1)]);
+      return await runNestedBash(ctx, content, [resolvedPath, ...ctx.args.slice(1)]);
     },
   },
   {
@@ -247,8 +298,7 @@ export const shellControlCommands: Command[] = [
         return { stdout: '', stderr: 'bats: error: no test file specified\n', exitCode: 1 };
       }
 
-      const curDirName = ctx.vfs.currentDirectory?.name || '/home/hello';
-      const absPath = testFile.startsWith('/') ? testFile : `${curDirName}/${testFile}`.replace(/\/+/g, '/');
+      const absPath = ctx.vfs.resolvePath(testFile, ctx.env.USER || 'hello');
       const node = ctx.vfs.getNodeByPath(absPath);
       if (!node || node.type !== 'file') {
         return { stdout: '', stderr: `bats: error: file '${testFile}' not found\n`, exitCode: 1 };

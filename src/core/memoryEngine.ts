@@ -15,6 +15,8 @@ export interface SessionAuditRecord {
   status: 'SUCCESS' | 'ERROR';
   turns: number;
   error?: string;
+  capabilities?: Array<{ type: string; scope: string }>;
+  events?: Array<{ at: string; action: string; detail: string }>;
 }
 
 export class AgentMemoryManager {

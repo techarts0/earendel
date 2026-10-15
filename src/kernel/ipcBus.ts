@@ -3,8 +3,15 @@ import { IPCMessage } from './types';
 
 export type IPCServiceHandler = (msg: IPCMessage) => Promise<any>;
 
+declare const senderEndpointBrand: unique symbol;
+export interface IPCSenderEndpoint {
+  readonly [senderEndpointBrand]: true;
+}
+
 export class IPCBus {
   private serviceRegistry: Map<string, { pid: number; handler: IPCServiceHandler }> = new Map();
+  private senderEndpoints = new Map<number, IPCSenderEndpoint>();
+  private endpointPids = new WeakMap<object, number>();
   private messageLogBuffer: IPCMessage[] = [];
   private maxLogCapacity = 200;
 
@@ -22,10 +29,35 @@ export class IPCBus {
     this.serviceRegistry.delete(serviceName);
   }
 
+  /** Called by the process lifecycle manager; callers cannot choose a PID per message. */
+  public registerProcess(pid: number): IPCSenderEndpoint {
+    if (!Number.isSafeInteger(pid) || pid <= 0) throw new Error('IPC: invalid process PID');
+    const existing = this.senderEndpoints.get(pid);
+    if (existing) return existing;
+    const endpoint = Object.freeze({}) as IPCSenderEndpoint;
+    this.senderEndpoints.set(pid, endpoint);
+    this.endpointPids.set(endpoint, pid);
+    return endpoint;
+  }
+
+  public unregisterProcess(pid: number): void {
+    this.senderEndpoints.delete(pid);
+  }
+
+  public getProcessEndpoint(pid: number): IPCSenderEndpoint {
+    const endpoint = this.senderEndpoints.get(pid);
+    if (!endpoint) throw new Error(`IPC: process ${pid} has no active sender endpoint`);
+    return endpoint;
+  }
+
   /**
    * Sends an IPC message from a process to a target service daemon
    */
-  public async sendIPC(senderPid: number, serviceName: string, action: string, payload: any): Promise<any> {
+  public async sendIPC(sender: IPCSenderEndpoint, serviceName: string, action: string, payload: any): Promise<any> {
+    const senderPid = sender && typeof sender === 'object' ? this.endpointPids.get(sender) : undefined;
+    if (senderPid === undefined || this.senderEndpoints.get(senderPid) !== sender) {
+      throw new Error('[IPC Error] Invalid or revoked sender endpoint.');
+    }
     const targetService = this.serviceRegistry.get(serviceName);
     if (!targetService) {
       throw new Error(`[IPC Error] Service daemon '${serviceName}' is not registered on Microkernel IPC Bus.`);

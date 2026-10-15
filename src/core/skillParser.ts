@@ -16,6 +16,7 @@ export interface SkillToolDef {
 export interface SkillPermissionsDef {
   vfs_read?: string[];
   vfs_write?: string[];
+  /** Allows external network tools, MCP calls, and the configured remote LLM. */
   network?: boolean;
 }
 
@@ -35,11 +36,32 @@ export interface SkillManifest {
   [key: string]: any;
 }
 
+/** Explicit caller approvals. Manifest permissions are requests, never grants. */
+export interface SkillPermissionGrant {
+  vfs_read?: string[];
+  vfs_write?: string[];
+  system_tools?: string[];
+  mcp_tools?: string[];
+  network?: boolean;
+  memory?: boolean;
+}
+
 export interface ParsedSkill {
   manifest: SkillManifest;
   body: string;
   raw: string;
   resolvedPath?: string;
+}
+
+export const DEFAULT_SKILL_MAX_TURNS = 5;
+export const MAX_SKILL_TURNS = 20;
+export const MAX_SKILL_SOURCE_CHARS = 256_000;
+
+function parseMaxSkillTurns(value: unknown): number {
+  if (value === undefined || value === null || value === '') return DEFAULT_SKILL_MAX_TURNS;
+  const turns = Number(value);
+  if (!Number.isFinite(turns) || turns < 1) return DEFAULT_SKILL_MAX_TURNS;
+  return Math.min(Math.floor(turns), MAX_SKILL_TURNS);
 }
 
 /**
@@ -179,6 +201,9 @@ export function parseYamlFrontmatter(yamlStr: string): Record<string, any> {
  * Split skill Markdown content into Frontmatter and Body.
  */
 export function parseSkillContent(rawContent: string): ParsedSkill {
+  if (rawContent.length > MAX_SKILL_SOURCE_CHARS) {
+    throw new Error(`Skill source exceeds the ${MAX_SKILL_SOURCE_CHARS}-character limit.`);
+  }
   const trimmed = rawContent.trim();
 
   if (!trimmed.startsWith('---')) {
@@ -212,7 +237,7 @@ export function parseSkillContent(rawContent: string): ParsedSkill {
     tools: manifestData.tools || {},
     permissions: manifestData.permissions || {},
     timeout: manifestData.timeout ?? '60s',
-    max_turns: manifestData.max_turns ? Number(manifestData.max_turns) : 5,
+    max_turns: parseMaxSkillTurns(manifestData.max_turns),
     constraints: Array.isArray(manifestData.constraints) ? manifestData.constraints : [],
     references: Array.isArray(manifestData.references) ? manifestData.references : [],
     context_mode: manifestData.context_mode || 'ephemeral',
@@ -321,20 +346,24 @@ export function validateSkillInputs(
 /**
  * Parses timeout expression (e.g. "30s", "2m", 60000) into milliseconds.
  */
-export function parseTimeoutMs(timeoutVal: string | number | undefined, defaultMs = 60000): number {
-  if (typeof timeoutVal === 'number') return timeoutVal;
-  if (!timeoutVal) return defaultMs;
+export const MAX_SKILL_TIMEOUT_MS = 10 * 60 * 1000;
 
-  const str = String(timeoutVal).trim().toLowerCase();
-  if (str.endsWith('ms')) {
-    return parseInt(str, 10) || defaultMs;
+export function parseTimeoutMs(timeoutVal: string | number | undefined, defaultMs = 60000): number {
+  const fallback = Number.isFinite(defaultMs) && defaultMs > 0
+    ? Math.min(Math.ceil(defaultMs), MAX_SKILL_TIMEOUT_MS)
+    : 60000;
+  if (typeof timeoutVal === 'number') {
+    return Number.isFinite(timeoutVal) && timeoutVal > 0
+      ? Math.min(Math.ceil(timeoutVal), MAX_SKILL_TIMEOUT_MS)
+      : fallback;
   }
-  if (str.endsWith('s')) {
-    return (parseFloat(str) || 60) * 1000;
-  }
-  if (str.endsWith('m')) {
-    return (parseFloat(str) || 1) * 60 * 1000;
-  }
-  const num = Number(str);
-  return isNaN(num) ? defaultMs : num;
+  if (typeof timeoutVal !== 'string' || !timeoutVal.trim()) return fallback;
+
+  const match = timeoutVal.trim().toLowerCase().match(/^(\d+(?:\.\d+)?)(ms|s|m)?$/);
+  if (!match) return fallback;
+  const amount = Number(match[1]);
+  const multiplier = match[2] === 's' ? 1000 : match[2] === 'm' ? 60000 : 1;
+  const milliseconds = amount * multiplier;
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return fallback;
+  return Math.min(Math.ceil(milliseconds), MAX_SKILL_TIMEOUT_MS);
 }

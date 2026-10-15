@@ -1,6 +1,6 @@
 // Earendel Microkernel AI Intent Security Firewall Daemon (capAgentd, PID 6)
 import { AgentAction, AgentObservation, IKernelAgent, globalKernelAgentManager } from '../agentFramework';
-import { syscall } from '../syscall';
+import { syscallAs } from '../syscall';
 import { SyscallNo } from '../types';
 
 export class CapAgentDaemon implements IKernelAgent {
@@ -17,7 +17,7 @@ export class CapAgentDaemon implements IKernelAgent {
   public async observe(obs: AgentObservation): Promise<boolean> {
     // capAgentd audits high-risk syscall, IPC, and VFS modification events
     if (obs.source === 'syscall' || obs.source === 'vfs' || obs.source === 'ipc') {
-      const payloadStr = JSON.stringify(obs.payload).toLowerCase();
+      const payloadStr = `${obs.event} ${JSON.stringify(obs.payload)}`.toLowerCase();
       return (
         payloadStr.includes('rm ') ||
         payloadStr.includes('chmod') ||
@@ -31,7 +31,7 @@ export class CapAgentDaemon implements IKernelAgent {
   }
 
   public async infer(obs: AgentObservation): Promise<AgentAction> {
-    const payloadStr = JSON.stringify(obs.payload);
+    const payloadStr = `${obs.event} ${JSON.stringify(obs.payload)}`;
 
     // Fast-path intent heuristics
     if (payloadStr.includes('rm -rf /') || payloadStr.includes('/etc/shadow')) {
@@ -44,7 +44,7 @@ export class CapAgentDaemon implements IKernelAgent {
 
     // AI-driven intent inference
     const prompt = `Security Audit Event (${obs.event}): ${payloadStr}. Is this action hostile or unauthorized? Answer BLOCK or ALLOW.`;
-    const inferRes = await syscall(SyscallNo.SYS_INFER, prompt);
+    const inferRes = await syscallAs(6, SyscallNo.SYS_INFER, prompt);
     const aiResp = inferRes.data || '';
 
     const isHostile = aiResp.includes('BLOCK') || aiResp.includes('Audit') || aiResp.includes('Privileges');
