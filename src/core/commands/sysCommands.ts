@@ -6,6 +6,7 @@ import { globalSnapshotEngine } from '../snapshotEngine';
 import { globalWebTelemetryEngine } from '../webTelemetryEngine';
 import { SyscallNo } from '../../kernel/types';
 import { globalTaskScheduler } from '../../kernel/taskScheduler';
+import { globalCapabilityManager } from '../../kernel/capability';
 
 export const sysCommands: Command[] = [
   {
@@ -770,24 +771,30 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
     description: 'Full system VFS snapshot save and time-machine rollback restore',
     category: 'sys',
     execute: (ctx) => {
+      const callerPid = ctx.callerPid;
+      const caller = Number.isSafeInteger(callerPid) ? globalTaskScheduler.getProcess(callerPid!) : null;
+      if (!caller || caller.state !== 'RUNNING' || !globalCapabilityManager.hasCapability(caller.pid, 'CAP_SYS_ADMIN')) {
+        return { stdout: '', stderr: 'snapshot: CAP_SYS_ADMIN is required for system snapshots\n', exitCode: 1 };
+      }
       const sub = ctx.args[0];
       const targetName = ctx.args[1];
 
       if (sub === 'save' || sub === 'create') {
         if (!targetName) return { stdout: '', stderr: 'snapshot save: missing snapshot name\nUsage: snapshot save <name>\n', exitCode: 1 };
-        const res = globalSnapshotEngine.saveSnapshot(targetName);
+        const res = globalSnapshotEngine.saveSnapshot(targetName, caller.pid);
+        if (!res.success) return { stdout: '', stderr: `snapshot save: ${res.message}\n`, exitCode: 1 };
         return { stdout: `${res.message}\n`, stderr: '', exitCode: 0 };
       }
 
       if (sub === 'restore' || sub === 'rollback') {
         if (!targetName) return { stdout: '', stderr: 'snapshot restore: missing snapshot name\nUsage: snapshot restore <name>\n', exitCode: 1 };
-        const res = globalSnapshotEngine.restoreSnapshot(targetName);
+        const res = globalSnapshotEngine.restoreSnapshot(targetName, caller.pid);
         if (!res.success) return { stdout: '', stderr: `${res.message}\n`, exitCode: 1 };
         return { stdout: `${res.message}\n`, stderr: '', exitCode: 0 };
       }
 
       if (sub === 'list' || sub === 'ls') {
-        const list = globalSnapshotEngine.getSnapshots();
+        const list = globalSnapshotEngine.getSnapshots(caller.pid);
         if (list.length === 0) return { stdout: 'No system snapshots found.\n', stderr: '', exitCode: 0 };
         let out = 'SNAPSHOT NAME'.padEnd(20) + 'NODES'.padEnd(10) + 'CREATED AT\n';
         list.forEach((s: any) => {
@@ -798,7 +805,7 @@ Shell Syntax: Variables ($VAR), Pipe (|), Redirection (>/>>), Loops, and Script 
 
       if (sub === 'rm' || sub === 'delete') {
         if (!targetName) return { stdout: '', stderr: 'snapshot rm: missing snapshot name\n', exitCode: 1 };
-        const ok = globalSnapshotEngine.deleteSnapshot(targetName);
+        const ok = globalSnapshotEngine.deleteSnapshot(targetName, caller.pid);
         if (!ok) return { stdout: '', stderr: `snapshot '${targetName}' not found\n`, exitCode: 1 };
         return { stdout: `Deleted snapshot '${targetName}'\n`, stderr: '', exitCode: 0 };
       }

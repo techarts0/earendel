@@ -35,12 +35,22 @@ interface StoredNode {
 export type VFS = VirtualFileSystem;
 
 export class VirtualFileSystem {
+  public static readonly MAX_FILE_BYTES = 32 * 1024 * 1024;
   root: VFSNode;
   currentDirectory: VFSNode;
 
   private listeners: Array<() => void> = [];
   private db: IDBDatabase | null = null;
   private initializing = true;
+  private openingIndexedDB = false;
+  private hydrating = false;
+  private applyingStoredSnapshot = false;
+  private pendingPersistence = new Map<string, StoredNode | null>();
+  private pendingHostWrites = new Set<Promise<{ path: string; success: boolean }>>();
+  private hostWriteStates = new Map<string, { revision: number; committedContent: string | null; tail: Promise<boolean> }>();
+  private persistenceStatus: 'memory' | 'opening' | 'hydrating' | 'ready' | 'failed' = 'memory';
+  private resolvePersistenceReady!: () => void;
+  private persistenceReady = new Promise<void>((resolve) => { this.resolvePersistenceReady = resolve; });
 
   constructor() {
     this.root = {
@@ -58,6 +68,7 @@ export class VirtualFileSystem {
 
     this.currentDirectory = this.root;
     this.initDefaultStructure();
+    this.ensureRootHomePermissions();
     this.initializing = false;
     this.initIndexedDB();
   }
@@ -247,7 +258,7 @@ done
 
     this.writeFile(
       '/etc/shadow',
-      'root:$6$earendel$salt$earendel_hash:19000:0:99999:7:::\nhello:$6$earendel$salt$earendel_hash:19000:0:99999:7:::\n',
+      'root:123456:19000:0:99999:7:::\nhello:123456:19000:0:99999:7:::\n',
       'root'
     );
     this.chmod('/etc/shadow', '640');
@@ -401,21 +412,137 @@ constraints:
 
   // IndexedDB Auto-Persistence Engine
   private initIndexedDB() {
-    if (typeof window === 'undefined' || !window.indexedDB) return;
+    if (typeof window === 'undefined') {
+      this.ensureDefaultLoginAccounts();
+      this.resolvePersistenceReady();
+      return;
+    }
+    if (!window.indexedDB) {
+      this.persistenceStatus = 'failed';
+      this.ensureDefaultLoginAccounts();
+      this.resolvePersistenceReady();
+      return;
+    }
 
-    const request = indexedDB.open('earendel_vfs_db', 1);
+    this.openingIndexedDB = true;
+    this.persistenceStatus = 'opening';
+    try {
+      const request = indexedDB.open('earendel_vfs_db', 1);
 
-    request.onupgradeneeded = (e) => {
-      const db = (e.target as IDBOpenDBRequest).result;
-      if (!db.objectStoreNames.contains('vfs_nodes')) {
-        db.createObjectStore('vfs_nodes', { keyPath: 'path' });
+      request.onupgradeneeded = (e) => {
+        const db = (e.target as IDBOpenDBRequest).result;
+        if (!db.objectStoreNames.contains('vfs_nodes')) {
+          db.createObjectStore('vfs_nodes', { keyPath: 'path' });
+        }
+      };
+
+      request.onsuccess = (e) => {
+        this.db = (e.target as IDBOpenDBRequest).result;
+        this.openingIndexedDB = false;
+        this.hydrating = true;
+        this.persistenceStatus = 'hydrating';
+        this.loadFromIndexedDB();
+      };
+      request.onblocked = () => {
+        // Let the terminal remain usable if another tab keeps an older database
+        // connection open. Writes stay queued and a later success still hydrates.
+        this.persistenceStatus = 'failed';
+        this.ensureDefaultLoginAccounts();
+        this.resolvePersistenceReady();
+        console.warn('Earendel VFS database upgrade is blocked by another open tab.');
+      };
+      request.onerror = () => {
+        this.openingIndexedDB = false;
+        this.pendingPersistence.clear();
+        this.persistenceStatus = 'failed';
+        this.ensureDefaultLoginAccounts();
+        this.resolvePersistenceReady();
+        console.warn('Earendel VFS persistence is unavailable; changes remain in memory.');
+      };
+    } catch (error) {
+      this.openingIndexedDB = false;
+      this.pendingPersistence.clear();
+      this.persistenceStatus = 'failed';
+      this.ensureDefaultLoginAccounts();
+      this.resolvePersistenceReady();
+      console.warn('Earendel VFS persistence is unavailable; changes remain in memory.', error);
+    }
+  }
+
+  public waitUntilReady(): Promise<void> {
+    return this.persistenceReady;
+  }
+
+/** Restore documented classroom credentials when an older/incomplete image
+ * has a shadow file but is missing one of the built-in account records or
+ * contains an unusable placeholder/foreign password field. Existing usable
+ * passwords and custom accounts stay untouched.
+   */
+  public ensureDefaultLoginAccounts() {
+    // A fresh browser profile has no IndexedDB snapshot, but a partially
+    // restored/older image can contain /etc without /etc/shadow. Recreate the
+    // classroom defaults in that case as well so the login prompt never
+    // advertises credentials that the authentication service cannot verify.
+    const shadowContent = this.readFile('/etc/shadow', 'root');
+    const lines = (shadowContent ?? '').split('\n');
+    const accountRows = new Map<string, number>();
+    lines.forEach((line, index) => {
+      const username = line.split(':', 1)[0];
+      // Authentication reads the first matching row, so recovery must update
+      // that same row even if a damaged/imported shadow file has duplicates.
+      if (username && !accountRows.has(username)) accountRows.set(username, index);
+    });
+    let changed = shadowContent === null;
+    for (const username of ['root', 'hello']) {
+      const rowIndex = accountRows.get(username);
+      if (rowIndex === undefined) {
+        lines.push(`${username}:123456:19000:0:99999:7:::`);
+        accountRows.set(username, lines.length - 1);
+        changed = true;
+        continue;
       }
-    };
 
-    request.onsuccess = (e) => {
-      this.db = (e.target as IDBOpenDBRequest).result;
-      this.loadFromIndexedDB();
-    };
+      const fields = lines[rowIndex].split(':');
+      const passwordField = fields[1] ?? '';
+      // The browser auth service can verify plaintext classroom credentials
+      // and Earendel PBKDF2 hashes, but cannot verify Linux crypt hashes.
+      // A leading `!` is Linux's password-lock marker, including forms such
+      // as `!<hash>` and `!!`. Recover the two documented classroom accounts
+      // when an imported/partially initialized image leaves them locked. This
+      // deliberately does not modify custom accounts or valid credentials.
+      const pbkdf2Parts = passwordField.startsWith('pbkdf2-sha256$') ? passwordField.split('$') : null;
+      const malformedPbkdf2 = !!pbkdf2Parts && (
+        pbkdf2Parts.length !== 4 ||
+        !/^\d+$/.test(pbkdf2Parts[1]) ||
+        Number(pbkdf2Parts[1]) < 100_000 || Number(pbkdf2Parts[1]) > 600_000 ||
+        !/^(?:[0-9a-f]{2}){16}$/i.test(pbkdf2Parts[2]) ||
+        !/^(?:[0-9a-f]{2}){32}$/i.test(pbkdf2Parts[3])
+      );
+      const unsupportedCredential = passwordField === '' || passwordField === 'x' || passwordField.startsWith('!') || passwordField === '*' || /^\$(?:[156y]|2[aby])\$/.test(passwordField) || malformedPbkdf2;
+      if (!unsupportedCredential) continue;
+      fields[1] = '123456';
+      while (fields.length < 9) fields.push('');
+      lines[rowIndex] = fields.join(':');
+      changed = true;
+    }
+    if (!changed) return;
+    const normalized = lines.filter((line, index) => line || index < lines.length - 1).join('\n');
+    if (this.writeFile('/etc/shadow', normalized, 'root')) {
+      this.chown('/etc/shadow', 'root:root', false, 'root');
+      this.chmod('/etc/shadow', '640', false, 'root');
+    }
+  }
+
+  /** Keep the privileged account's home private in fresh and restored images. */
+  private ensureRootHomePermissions() {
+    const rootHome = this.getNodeByPath('/root');
+    if (!rootHome || rootHome.type !== 'directory') return;
+    if (rootHome.owner !== 'root' || rootHome.group !== 'root') {
+      this.chown('/root', 'root:root', false, 'root');
+    }
+    if (rootHome.permissions !== 'rwx------') {
+      this.chmod('/root', '700', false, 'root');
+    }
   }
 
   private async loadFromIndexedDB() {
@@ -425,14 +552,25 @@ constraints:
       const store = tx.objectStore('vfs_nodes');
       const request = store.getAll();
 
-      request.onsuccess = () => {
+      request.onsuccess = async () => {
         const storedNodes: StoredNode[] = request.result || [];
+        this.applyingStoredSnapshot = true;
         if (storedNodes.length > 0) {
           // Sort by path depth to build tree in order
           storedNodes.sort((a, b) => a.path.split('/').length - b.path.split('/').length);
 
           for (const sNode of storedNodes) {
             if (sNode.path === '/' || sNode.path === '/home/hello') continue;
+            // Mutations made while IndexedDB was opening are newer than this
+            // snapshot and must win over stale persisted values.
+            if (this.pendingPersistence.has(sNode.path)) continue;
+            if (sNode.type === 'file' && typeof sNode.content === 'string' &&
+                (sNode.content.length > VirtualFileSystem.MAX_FILE_BYTES ||
+                 new TextEncoder().encode(sNode.content).byteLength > VirtualFileSystem.MAX_FILE_BYTES)) {
+              // Keep the persisted record intact for recovery/export, but never
+              // hydrate an oversized file into the live browser VFS.
+              continue;
+            }
 
             let node = this.getNodeByPath(sNode.path);
             if (!node) {
@@ -466,19 +604,118 @@ constraints:
             globalPkgManager.rehydrateInstalledFromVFS();
           });
         }
+        this.applyingStoredSnapshot = false;
+        this.ensureDefaultLoginAccounts();
+        this.ensureRootHomePermissions();
+        this.hydrating = false;
+        const committed = await this.flushPendingPersistence();
+        this.persistenceStatus = committed ? 'ready' : 'failed';
+        this.resolvePersistenceReady();
+      };
+      request.onerror = async () => {
+        this.applyingStoredSnapshot = false;
+        this.ensureDefaultLoginAccounts();
+        this.ensureRootHomePermissions();
+        this.hydrating = false;
+        const committed = await this.flushPendingPersistence();
+        this.persistenceStatus = committed ? 'ready' : 'failed';
+        this.resolvePersistenceReady();
+        console.warn('Failed to restore Earendel VFS from IndexedDB.');
       };
     } catch (err) {
+      this.applyingStoredSnapshot = false;
+      this.ensureDefaultLoginAccounts();
+      this.ensureRootHomePermissions();
+      this.hydrating = false;
+      const committed = await this.flushPendingPersistence();
+      this.persistenceStatus = committed ? 'ready' : 'failed';
+      this.resolvePersistenceReady();
       console.warn('Failed to load VFS from IndexedDB:', err);
     }
   }
 
   private saveNodeToIndexedDB(pathStr: string, node: VFSNode) {
+    if (this.initializing || this.applyingStoredSnapshot) return;
+    const record: StoredNode = {
+      path: pathStr,
+      name: node.name,
+      type: node.type,
+      permissions: node.permissions,
+      owner: node.owner,
+      group: node.group,
+      size: node.size,
+      updatedAt: node.updatedAt.toISOString(),
+      content: node.content,
+      symlinkTarget: node.symlinkTarget,
+    };
+    if (this.openingIndexedDB || this.hydrating) {
+      this.pendingPersistence.set(pathStr, record);
+      return;
+    }
     if (!this.db) return;
     try {
       const tx = this.db.transaction('vfs_nodes', 'readwrite');
       const store = tx.objectStore('vfs_nodes');
+      store.put(record);
+    } catch (err) {
+      // Ignore IDB write error
+    }
+  }
+
+  private deleteNodeFromIndexedDB(pathStr: string) {
+    if (this.initializing || this.applyingStoredSnapshot) return;
+    if (this.openingIndexedDB || this.hydrating) {
+      this.pendingPersistence.set(pathStr, null);
+      return;
+    }
+    if (!this.db) return;
+    try {
+      const tx = this.db.transaction('vfs_nodes', 'readwrite');
+      const store = tx.objectStore('vfs_nodes');
+      store.delete(pathStr);
+    } catch (err) {
+      // Ignore IDB delete error
+    }
+  }
+
+  private flushPendingPersistence(): Promise<boolean> {
+    if (!this.db) return Promise.resolve(false);
+    if (this.pendingPersistence.size === 0) return Promise.resolve(true);
+    const mutations = [...this.pendingPersistence.entries()];
+    return new Promise((resolve) => {
+      try {
+        const tx = this.db!.transaction('vfs_nodes', 'readwrite');
+        const store = tx.objectStore('vfs_nodes');
+        for (const [path, record] of mutations) {
+          if (record) store.put(record);
+          else store.delete(path);
+        }
+        tx.oncomplete = () => {
+          for (const [path, record] of mutations) {
+            if (this.pendingPersistence.get(path) === record) this.pendingPersistence.delete(path);
+          }
+          resolve(true);
+        };
+        tx.onerror = () => resolve(false);
+        tx.onabort = () => resolve(false);
+      } catch (error) {
+        console.warn('Failed to persist queued Earendel VFS changes:', error);
+        resolve(false);
+      }
+    });
+  }
+
+  /** Wait for IndexedDB hydration and commit the latest versions of the supplied paths. */
+  public async persistPaths(paths: string[]): Promise<boolean> {
+    await this.persistenceReady;
+    if (this.persistenceStatus === 'memory') return true;
+    if (this.persistenceStatus !== 'ready' || !this.db || paths.length === 0) return false;
+    const records = paths.map((path) => {
+      const absolutePath = this.resolvePath(path);
+      const node = this.getNodeByPath(absolutePath);
+      if (!node) return { path: absolutePath, record: null as StoredNode | null };
       const record: StoredNode = {
-        path: pathStr,
+        path: absolutePath,
         name: node.name,
         type: node.type,
         permissions: node.permissions,
@@ -489,21 +726,23 @@ constraints:
         content: node.content,
         symlinkTarget: node.symlinkTarget,
       };
-      store.put(record);
-    } catch (err) {
-      // Ignore IDB write error
-    }
-  }
-
-  private deleteNodeFromIndexedDB(pathStr: string) {
-    if (!this.db) return;
-    try {
-      const tx = this.db.transaction('vfs_nodes', 'readwrite');
-      const store = tx.objectStore('vfs_nodes');
-      store.delete(pathStr);
-    } catch (err) {
-      // Ignore IDB delete error
-    }
+      return { path: absolutePath, record };
+    });
+    return new Promise((resolve) => {
+      try {
+        const tx = this.db!.transaction('vfs_nodes', 'readwrite');
+        const store = tx.objectStore('vfs_nodes');
+        for (const { path, record } of records) {
+          if (record) store.put(record);
+          else store.delete(path);
+        }
+        tx.oncomplete = () => resolve(true);
+        tx.onerror = () => resolve(false);
+        tx.onabort = () => resolve(false);
+      } catch {
+        resolve(false);
+      }
+    });
   }
 
   // Subscribe to VFS changes
@@ -519,7 +758,7 @@ constraints:
   }
 
   public isExecutable(pathStr: string): boolean {
-    const node = this.getNodeByPath(pathStr);
+    const node = this.getResolvedNodeByPath(pathStr);
     if (!node || node.type !== 'file') return false;
     const p = node.permissions;
     // Check if any 'x' bit is set (e.g. rwxr-xr-x or rwxrwxrwx)
@@ -585,11 +824,63 @@ constraints:
   }
 
   exists(pathStr: string, customHomeOrUser?: string): boolean {
-    return this.getNodeByPath(pathStr, customHomeOrUser) !== null;
+    return this.getResolvedNodeByPath(pathStr, customHomeOrUser) !== null;
   }
 
   getNodeByPath(pathStr: string, customHomeOrUser?: string): VFSNode | null {
-    const absPath = this.resolvePath(pathStr, customHomeOrUser);
+    const absPath = this.resolveSymlinkPath(pathStr, false, customHomeOrUser);
+    return absPath ? this.getRawNodeByAbsolutePath(absPath) : null;
+  }
+
+  getResolvedNodeByPath(pathStr: string, customHomeOrUser?: string): VFSNode | null {
+    const absPath = this.resolveSymlinkPath(pathStr, true, customHomeOrUser);
+    return absPath ? this.getRawNodeByAbsolutePath(absPath) : null;
+  }
+
+  /** Resolve symbolic links component-by-component, rejecting loops after 40 hops. */
+  resolveSymlinkPath(pathStr: string, followFinal = true, customHomeOrUser?: string): string | null {
+    if (!pathStr || pathStr.length > 4096 || pathStr.includes('\0')) return null;
+    let input = pathStr;
+    if (input === '~' || input.startsWith('~/')) input = this.resolvePath(input, customHomeOrUser);
+    else if (!input.startsWith('/')) input = `${this.getPwd()}/${input}`;
+
+    let pending = input.split('/');
+    if (input.endsWith('/')) pending.push('.');
+    let resolved: string[] = [];
+    let hops = 0;
+    for (let index = 0; index < pending.length; index++) {
+      const part = pending[index];
+      if (!part || part === '.') continue;
+      if (part === '..') {
+        resolved.pop();
+        continue;
+      }
+      const candidateParts = [...resolved, part];
+      const candidate = `/${candidateParts.join('/')}`;
+      const node = this.getRawNodeByAbsolutePath(candidate);
+      const isFinal = !pending.slice(index + 1).some((tail) => tail && tail !== '.');
+      if (node?.type === 'symlink' && (followFinal || !isFinal)) {
+        if (++hops > 40 || !node.symlinkTarget) return null;
+        const targetParts = node.symlinkTarget.split('/');
+        if (node.symlinkTarget.endsWith('/')) targetParts.push('.');
+        const remaining = pending.slice(index + 1);
+        pending = node.symlinkTarget.startsWith('/')
+          ? [...targetParts, ...remaining]
+          : [...resolved, ...targetParts, ...remaining];
+        resolved = [];
+        index = -1;
+        continue;
+      }
+      const remainingComponents = pending.slice(index + 1).filter((tail) => tail !== '');
+      const hasFollowingComponent = remainingComponents.length > 0;
+      const hasNavigationAfterMissing = remainingComponents.some((tail) => tail === '.' || tail === '..');
+      if ((node && node.type !== 'directory' && hasFollowingComponent) || (!node && hasNavigationAfterMissing)) return null;
+      resolved.push(part);
+    }
+    return `/${resolved.join('/')}`;
+  }
+
+  private getRawNodeByAbsolutePath(absPath: string): VFSNode | null {
     if (absPath.startsWith('/proc') || absPath === '/proc') {
       const procNode = this.generateProcNode(absPath);
       if (procNode) return procNode;
@@ -644,7 +935,10 @@ constraints:
   }
 
   mkdir(pathStr: string, recursive = false): boolean {
-    const absPath = this.resolvePath(pathStr);
+    // mkdir does not follow a symlink in the final component (`mkdir link`
+    // must fail with an existing path); intermediate directory links resolve.
+    const absPath = this.resolveSymlinkPath(pathStr, false);
+    if (!absPath) return false;
     const parts = absPath.split('/').filter(Boolean);
     let curr = this.root;
 
@@ -734,35 +1028,184 @@ constraints:
     return bits[offset + bitOffset] !== '-';
   }
 
+  /** Update a node timestamp without opening/truncating its content. */
+  touch(pathStr: string, currentUser = 'hello', timestamp = new Date(), noCreate = false): boolean {
+    if (!(timestamp instanceof Date) || !Number.isFinite(timestamp.getTime())) return false;
+    const absPath = this.resolveSymlinkPath(pathStr, true, currentUser);
+    if (!absPath) return false;
+    const node = this.getRawNodeByAbsolutePath(absPath);
+    if (node) {
+      if (!this.checkPermission(node, 'w', currentUser)) return false;
+      node.updatedAt = new Date(timestamp.getTime());
+      this.saveNodeToIndexedDB(absPath, node);
+      this.notify();
+      return true;
+    }
+    if (noCreate) return true;
+    if (!this.writeFile(absPath, '', currentUser)) return false;
+    const created = this.getNodeByPath(absPath);
+    if (!created) return false;
+    created.updatedAt = new Date(timestamp.getTime());
+    this.saveNodeToIndexedDB(absPath, created);
+    this.notify();
+    return true;
+  }
+
   writeFile(pathStr: string, content: string, currentUser = 'hello'): boolean {
-    const absPath = this.resolvePath(pathStr);
+    return this.writeFileWithAuthorization(pathStr, content, currentUser, () => true);
+  }
+
+  /** Synchronous VFS view with a deferred, authorization-aware host commit. */
+  writeFileWithAuthorization(
+    pathStr: string,
+    content: string,
+    currentUser = 'hello',
+    mayCommit: () => boolean = () => true,
+  ): boolean {
+    // Bound each VFS object before copying it into IndexedDB, a host mount, or
+    // the in-memory tree. UTF-16 code-unit length is a lower bound on UTF-8
+    // bytes, so large inputs can be rejected without allocating an encoded copy.
+    if (typeof content !== 'string' || content.length > VirtualFileSystem.MAX_FILE_BYTES) return false;
+    if (new TextEncoder().encode(content).byteLength > VirtualFileSystem.MAX_FILE_BYTES) return false;
+    const absPath = this.resolveSymlinkPath(pathStr, true, currentUser);
+    if (!absPath) return false;
     if (absPath === '/dev/null') return true;
     // Device side effects must pass through vfsd/driverd with the real sender
     // endpoint. A direct VFS write has neither a process identity nor authority.
     if (!this.initializing && absPath.startsWith('/dev/')) return false;
 
-    if (globalHostMountEngine.getMatchingMount(absPath)) {
-      globalHostMountEngine.writeFile(absPath, content);
-    }
+    if (!this.canWriteResolvedFile(absPath, currentUser) || !mayCommit()) return false;
+    const mount = globalHostMountEngine.getMatchingMount(absPath);
+    if (!mount) return this.writeResolvedFile(absPath, content, currentUser);
 
+    const priorNode = this.getNodeByPath(absPath, currentUser);
+    const priorContent = priorNode?.type === 'file' ? priorNode.content ?? '' : null;
+    if (!this.writeResolvedFile(absPath, content, currentUser)) return false;
+    this.enqueueHostWrite(absPath, content, currentUser, priorContent, mayCommit);
+    return true;
+  }
+
+  private enqueueHostWrite(
+    absPath: string,
+    content: string,
+    currentUser: string,
+    initialContent: string | null,
+    mayCommit: () => boolean,
+  ): void {
+    let state = this.hostWriteStates.get(absPath);
+    if (!state) {
+      state = { revision: 0, committedContent: initialContent, tail: Promise.resolve(true) };
+      this.hostWriteStates.set(absPath, state);
+    }
+    const revision = ++state.revision;
+    const activeState = state;
+    const operation = activeState.tail.catch(() => false).then(async () => {
+      const succeeded = await globalHostMountEngine.writeFile(absPath, content, () =>
+        mayCommit() && this.canWriteResolvedFile(absPath, currentUser));
+      if (succeeded) {
+        activeState.committedContent = content;
+      } else if (activeState.revision === revision) {
+        this.restoreHostWriteMirror(absPath, activeState.committedContent, currentUser);
+      }
+      return succeeded;
+    });
+    activeState.tail = operation;
+    let tracked!: Promise<{ path: string; success: boolean }>;
+    tracked = operation.then((success) => ({ path: absPath, success })).finally(() => {
+      this.pendingHostWrites.delete(tracked);
+      if (activeState.revision === revision && activeState.tail === operation) this.hostWriteStates.delete(absPath);
+    });
+    this.pendingHostWrites.add(tracked);
+  }
+
+  private restoreHostWriteMirror(absPath: string, content: string | null, currentUser: string): void {
     const dirPath = absPath.substring(0, absPath.lastIndexOf('/')) || '/';
     const fileName = absPath.substring(absPath.lastIndexOf('/') + 1);
-
-    const dirNode = this.getNodeByPath(dirPath);
-    if (!dirNode || dirNode.type !== 'directory' || !dirNode.children) {
-      return false;
+    const parent = this.getNodeByPath(dirPath);
+    if (!fileName || !parent || parent.type !== 'directory' || !parent.children) return;
+    const current = parent.children.get(fileName);
+    if (content === null) {
+      if (current) {
+        parent.children.delete(fileName);
+        this.deleteNodeFromIndexedDB(absPath);
+        this.notify();
+      }
+      return;
     }
+    if (current?.type === 'file') {
+      current.content = content;
+      current.size = new TextEncoder().encode(content).byteLength;
+      current.updatedAt = new Date();
+      this.saveNodeToIndexedDB(absPath, current);
+      this.notify();
+      return;
+    }
+    this.writeResolvedFile(absPath, content, currentUser, true);
+  }
 
-    let fileNode = dirNode.children.get(fileName);
+  /** Wait for writes initiated by synchronous command handlers and return failed paths. */
+  async flushPendingHostWrites(): Promise<string[]> {
+    const failedPaths: string[] = [];
+    while (this.pendingHostWrites.size > 0) {
+      const batch = Array.from(this.pendingHostWrites);
+      const results = await Promise.all(batch);
+      for (const result of results) if (!result.success) failedPaths.push(result.path);
+    }
+    return failedPaths;
+  }
+
+  /** Write through host mounts before committing the corresponding VFS content. */
+  async writeFileAsync(
+    pathStr: string,
+    content: string,
+    currentUser = 'hello',
+    mayCommit: () => boolean = () => true,
+  ): Promise<boolean> {
+    if (typeof content !== 'string' || content.length > VirtualFileSystem.MAX_FILE_BYTES) return false;
+    if (new TextEncoder().encode(content).byteLength > VirtualFileSystem.MAX_FILE_BYTES) return false;
+    const absPath = this.resolveSymlinkPath(pathStr, true, currentUser);
+    if (!absPath || absPath === '/dev/null') return absPath === '/dev/null';
+    if (!this.initializing && absPath.startsWith('/dev/')) return false;
+    if (!this.canWriteResolvedFile(absPath, currentUser) || !mayCommit()) return false;
+
+    if (globalHostMountEngine.getMatchingMount(absPath)) {
+      const hostWriteSucceeded = await globalHostMountEngine.writeFile(absPath, content, () =>
+        mayCommit() && this.canWriteResolvedFile(absPath, currentUser));
+      // close() is the host filesystem's commit point. Once it succeeds, keep
+      // the VFS mirror consistent even if the caller exits while close settles.
+      if (!hostWriteSucceeded) return false;
+      return this.writeResolvedFile(absPath, content, currentUser, true);
+    }
+    // No await between authorization and the in-memory commit for ordinary VFS paths.
+    if (!this.canWriteResolvedFile(absPath, currentUser)) return false;
+    return this.writeResolvedFile(absPath, content, currentUser);
+  }
+
+  private canWriteResolvedFile(absPath: string, currentUser: string): boolean {
+    const dirPath = absPath.substring(0, absPath.lastIndexOf('/')) || '/';
+    const fileName = absPath.substring(absPath.lastIndexOf('/') + 1);
+    const dirNode = this.getNodeByPath(dirPath);
+    if (!fileName || !dirNode || dirNode.type !== 'directory' || !dirNode.children) return false;
+    const fileNode = dirNode.children.get(fileName);
     if (fileNode) {
-      if (fileNode.type === 'directory') return false;
-      if (!this.checkPermission(fileNode, 'w', currentUser)) return false;
+      return fileNode.type !== 'directory' && this.checkPermission(fileNode, 'w', currentUser);
+    }
+    return this.checkPermission(dirNode, 'w', currentUser);
+  }
+
+  private writeResolvedFile(absPath: string, content: string, currentUser: string, authorizationAlreadyChecked = false): boolean {
+    const dirPath = absPath.substring(0, absPath.lastIndexOf('/')) || '/';
+    const fileName = absPath.substring(absPath.lastIndexOf('/') + 1);
+    const dirNode = this.getNodeByPath(dirPath);
+    if (!fileName || !dirNode || dirNode.type !== 'directory' || !dirNode.children) return false;
+    let fileNode = dirNode.children.get(fileName);
+    if (!authorizationAlreadyChecked && !this.canWriteResolvedFile(absPath, currentUser)) return false;
+    const byteLength = new TextEncoder().encode(content).byteLength;
+    if (fileNode) {
       fileNode.content = content;
-      fileNode.size = new TextEncoder().encode(content).length;
+      fileNode.size = byteLength;
       fileNode.updatedAt = new Date();
     } else {
-      if (!this.checkPermission(dirNode, 'w', currentUser)) return false;
-      const byteLength = new TextEncoder().encode(content).length;
       const isBinDir = dirPath === '/bin' || dirPath === '/usr/bin' || dirPath === '/sbin' || dirPath === '/usr/sbin';
       fileNode = {
         id: Math.random().toString(36).substring(2, 9),
@@ -773,7 +1216,7 @@ constraints:
         group: currentUser,
         size: byteLength,
         updatedAt: new Date(),
-        content: content,
+        content,
         parent: dirNode,
       };
       dirNode.children.set(fileName, fileNode);
@@ -785,7 +1228,8 @@ constraints:
   }
 
   readFile(pathStr: string, currentUser = 'hello'): string | null {
-    const absPath = this.resolvePath(pathStr);
+    const absPath = this.resolveSymlinkPath(pathStr, true, currentUser);
+    if (!absPath) return null;
     if (absPath === '/dev/null') return '';
     if (absPath === '/dev/zero') return '\0'.repeat(1024);
     if (absPath === '/dev/urandom' || absPath === '/dev/random') {
@@ -794,7 +1238,7 @@ constraints:
       return Array.from(bytes).map((b) => String.fromCharCode(b)).join('');
     }
 
-    const node = this.getNodeByPath(absPath);
+    const node = this.getRawNodeByAbsolutePath(absPath);
     if (node && node.type === 'file') {
       if (!this.checkPermission(node, 'r', currentUser)) return null;
       return node.content ?? '';
@@ -802,14 +1246,7 @@ constraints:
     return null;
   }
 
-  remove(pathStr: string, recursive = false, currentUser = 'hello'): boolean {
-    const absPath = this.resolvePath(pathStr);
-
-    if (globalHostMountEngine.getMatchingMount(absPath)) {
-      globalHostMountEngine.removeEntry(absPath);
-    }
-
-    const node = this.getNodeByPath(absPath);
+  private canRemoveNode(node: VFSNode | null, absPath: string, recursive: boolean, currentUser: string): node is VFSNode {
     if (!node || !node.parent || node === this.root) return false;
 
     // Protected system root directories that cannot be deleted
@@ -842,7 +1279,13 @@ constraints:
       return false;
     }
 
-    node.parent.children?.delete(node.name);
+    return true;
+  }
+
+  private removeValidatedNode(node: VFSNode, absPath: string): boolean {
+    const parent = node.parent;
+    if (!parent) return false;
+    parent.children?.delete(node.name);
 
     const deleteSubtreeIDB = (n: VFSNode, currPath: string) => {
       if (n.type === 'directory' && n.children) {
@@ -859,9 +1302,38 @@ constraints:
     return true;
   }
 
+  /** Synchronous removal is limited to the simulated VFS. Host entries require removeAsync. */
+  remove(pathStr: string, recursive = false, currentUser = 'hello'): boolean {
+    const absPath = this.resolveSymlinkPath(pathStr, false, currentUser);
+    if (!absPath || globalHostMountEngine.getMatchingMount(absPath)) return false;
+    const node = this.getNodeByPath(absPath);
+    return this.canRemoveNode(node, absPath, recursive, currentUser) && this.removeValidatedNode(node, absPath);
+  }
+
+  /** Remove an entry only after VFS permissions pass and the host operation succeeds. */
+  async removeAsync(
+    pathStr: string,
+    recursive = false,
+    currentUser = 'hello',
+    mayCommit: () => boolean = () => true,
+  ): Promise<boolean> {
+    const absPath = this.resolveSymlinkPath(pathStr, false, currentUser);
+    if (!absPath || !mayCommit()) return false;
+    const node = this.getNodeByPath(absPath);
+    if (!this.canRemoveNode(node, absPath, recursive, currentUser)) return false;
+    if (globalHostMountEngine.getMatchingMount(absPath) &&
+        !await globalHostMountEngine.removeEntry(absPath, recursive, mayCommit)) return false;
+    // Host removal is already committed at this point; mirror that result even
+    // if authority was revoked while the host API was settling. For in-memory
+    // VFS entries there is no await, so this is the final authorization check.
+    if (!globalHostMountEngine.getMatchingMount(absPath) && !mayCommit()) return false;
+    return this.removeValidatedNode(node, absPath);
+  }
+
   changeDirectory(pathStr: string, currentUser = 'hello'): boolean {
-    const absPath = this.resolvePath(pathStr, currentUser);
-    const target = this.getNodeByPath(absPath, currentUser);
+    const absPath = this.resolveSymlinkPath(pathStr, true, currentUser);
+    if (!absPath) return false;
+    const target = this.getRawNodeByAbsolutePath(absPath);
 
     if (target) {
       const match = globalHostMountEngine.getMatchingMount(absPath);
@@ -881,8 +1353,9 @@ constraints:
   }
 
   chmod(pathStr: string, mode: string, recursive: boolean = false, currentUser?: string): boolean {
-    const absPath = this.resolvePath(pathStr);
-    const node = this.getNodeByPath(absPath);
+    const absPath = this.resolveSymlinkPath(pathStr, true, currentUser);
+    if (!absPath) return false;
+    const node = this.getRawNodeByAbsolutePath(absPath);
     if (!node) return false;
 
     const isValidMode = (value: string) => /^0?[0-7]{3}$/.test(value) || value.split(',').every((clause) => /^[ugoa]*[+\-=][rwx]*$/.test(clause));
@@ -966,8 +1439,9 @@ constraints:
 
   chown(pathStr: string, ownerGroupStr: string, recursive: boolean = false, currentUser?: string): boolean {
     if (currentUser && currentUser !== 'root') return false;
-    const absPath = this.resolvePath(pathStr);
-    const node = this.getNodeByPath(absPath);
+    const absPath = this.resolveSymlinkPath(pathStr, true, currentUser);
+    if (!absPath) return false;
+    const node = this.getRawNodeByAbsolutePath(absPath);
     if (!node) return false;
 
     let owner = ownerGroupStr;
@@ -1449,13 +1923,15 @@ constraints:
   }
 
   symlink(targetPath: string, linkPathStr: string): boolean {
-    const absLinkPath = this.resolvePath(linkPathStr);
+    if (!targetPath || targetPath.length > 4096 || linkPathStr.length > 4096) return false;
+    const absLinkPath = this.resolveSymlinkPath(linkPathStr, false);
+    if (!absLinkPath) return false;
     const lastSlashIndex = absLinkPath.lastIndexOf('/');
     const dirPath = absLinkPath.substring(0, lastSlashIndex) || '/';
     const linkName = absLinkPath.substring(lastSlashIndex + 1);
 
     const dirNode = this.getNodeByPath(dirPath);
-    if (!dirNode || dirNode.type !== 'directory' || !dirNode.children) {
+    if (!linkName || !dirNode || dirNode.type !== 'directory' || !dirNode.children || dirNode.children.has(linkName)) {
       return false;
     }
 

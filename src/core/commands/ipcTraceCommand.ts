@@ -1,22 +1,24 @@
 import { Command } from '../types';
 import { globalIPCBus } from '../../kernel/ipcBus';
-
-let isIPCTraceEnabled = true;
+import { globalCapabilityManager } from '../../kernel/capability';
 
 export const ipcTraceCommand: Command = {
   name: 'ipc-trace',
   description: 'Inspect and trace microkernel IPC daemon message traffic',
   category: 'sys',
   execute: (ctx) => {
+    if (ctx.callerPid === undefined || !globalCapabilityManager.hasCapability(ctx.callerPid, 'CAP_SYS_ADMIN')) {
+      return { stdout: '', stderr: 'ipc-trace: permission denied; CAP_SYS_ADMIN is required\n', exitCode: 1 };
+    }
     const sub = ctx.args[0] || 'dump';
 
     if (sub === 'on') {
-      isIPCTraceEnabled = true;
+      globalIPCBus.setTracingEnabled(true);
       return { stdout: 'Microkernel IPC Message Tracing ENABLED.\n', stderr: '', exitCode: 0 };
     }
 
     if (sub === 'off') {
-      isIPCTraceEnabled = false;
+      globalIPCBus.setTracingEnabled(false);
       return { stdout: 'Microkernel IPC Message Tracing DISABLED.\n', stderr: '', exitCode: 0 };
     }
 

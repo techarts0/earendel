@@ -9,16 +9,20 @@ export interface SchedStatEntry {
   pid: number;
   name: string;
   policy: SchedPolicy;
-  prio: number;
-  cpuTimeSec: number;
-  switches: number;
+  /** Null when this cooperative browser simulation cannot measure the value. */
+  prio: number | null;
+  cpuTimeSec: number | null;
+  waitTimeSec: number | null;
+  stateTransitions: number;
 }
 
 export class TaskScheduler {
+  public static readonly MAX_PROCESSES = 512;
   private pcbTable: Map<number, ProcessControlBlock> = new Map();
   private currentPolicy: SchedPolicy = 'CFS';
   private timeQuantumMs: number = 50;
-  private processSwitches: Map<number, number> = new Map();
+  private nextProcessGroupSequence = 1;
+  private processStateTransitions: Map<number, number> = new Map();
   private childWaiters = new Map<number, { parentPid: number; resolve: (result: { status?: number; error?: string }) => void }>();
 
   constructor() {
@@ -39,9 +43,10 @@ export class TaskScheduler {
       pid: p.pid,
       name: p.name,
       policy: this.currentPolicy,
-      prio: p.pid === 1 ? 99 : 20,
-      cpuTimeSec: parseFloat((0.01 + Math.random() * 0.08).toFixed(2)),
-      switches: (this.processSwitches.get(p.pid) || 4) + Math.floor(Math.random() * 3),
+      prio: null,
+      cpuTimeSec: null,
+      waitTimeSec: null,
+      stateTransitions: this.processStateTransitions.get(p.pid) || 0,
     }));
   }
 
@@ -198,6 +203,15 @@ export class TaskScheduler {
       cpuUsagePercent: 0.1,
       cwd: '/home/hello',
     });
+
+    // Bootstrap authority only after the corresponding process identities
+    // exist. New processes never inherit authority from a stale PID entry.
+    globalCapabilityManager.grantDefaultCaps(1);
+    globalCapabilityManager.grantUserDefaults(24, 'hello');
+    // Kernel agents may invoke the local inference service, but do not receive
+    // network or system-administration authority by virtue of being agents.
+    globalCapabilityManager.grantCapability(5, 'CAP_DEVICE_IO', '/dev/ai');
+    globalCapabilityManager.grantCapability(6, 'CAP_DEVICE_IO', '/dev/ai');
   }
 
   public createProcess(pcb: ProcessControlBlock): ProcessControlBlock {
@@ -207,6 +221,14 @@ export class TaskScheduler {
     if (this.pcbTable.has(pcb.pid)) {
       throw new Error(`TaskScheduler: PID ${pcb.pid} is already allocated`);
     }
+    if (!this.canCreateProcess()) throw new Error('EAGAIN: process table is full');
+    if (pcb.processGroupId === undefined) pcb.processGroupId = `pg-${this.nextProcessGroupSequence++}`;
+    else if (typeof pcb.processGroupId !== 'string' || !pcb.processGroupId || pcb.processGroupId.length > 256) {
+      throw new Error('TaskScheduler: process group identity must be a non-empty string of at most 256 characters');
+    }
+    // PIDs may be reused after exit. Start every new identity with no tokens;
+    // fork explicitly copies the parent's capabilities after creation.
+    globalCapabilityManager.clearCapabilities(pcb.pid);
     if (!pcb.fds || pcb.fds.size === 0) {
       pcb.fds = new Map([
         [0, { fd: 0, path: '/dev/stdin', offset: 0, flags: 'r' }],
@@ -215,9 +237,13 @@ export class TaskScheduler {
       ]);
     }
     this.pcbTable.set(pcb.pid, pcb);
-    this.processSwitches.set(pcb.pid, 1);
+    this.processStateTransitions.set(pcb.pid, 0);
     globalIPCBus.registerProcess(pcb.pid);
     return pcb;
+  }
+
+  public canCreateProcess(): boolean {
+    return this.pcbTable.size < TaskScheduler.MAX_PROCESSES;
   }
 
   public getProcess(pid: number): ProcessControlBlock | null {
@@ -248,6 +274,7 @@ export class TaskScheduler {
   public updateState(pid: number, state: TaskState): boolean {
     const pcb = this.pcbTable.get(pid);
     if (!pcb) return false;
+    if (pcb.state !== state) this.processStateTransitions.set(pid, (this.processStateTransitions.get(pid) || 0) + 1);
     pcb.state = state;
     return true;
   }
@@ -284,13 +311,43 @@ export class TaskScheduler {
     return true;
   }
 
+  /** Revoke every member of a session group even if PPIDs have been reparented. */
+  public terminateProcessGroup(groupId: string, leaderPid: number, exitCode = 143): number[] {
+    if (typeof groupId !== 'string' || !groupId || groupId.length > 256 ||
+        !Number.isSafeInteger(leaderPid) || leaderPid <= 0) return [];
+    const members = Array.from(this.pcbTable.values())
+      .filter((process) => process.processGroupId === groupId && !process.isKernelDaemon)
+      .sort((a, b) => {
+        if (a.pid === leaderPid) return 1;
+        if (b.pid === leaderPid) return -1;
+        return b.startTime.getTime() - a.startTime.getTime() || b.pid - a.pid;
+      });
+    const terminated: number[] = [];
+    for (const member of members) {
+      const pid = member.pid;
+      const process = this.pcbTable.get(pid);
+      if (!process || process.isKernelDaemon) continue;
+      const changed = process.state === 'ZOMBIE'
+        ? this.reapProcess(pid)
+        : this.exitProcess(pid, exitCode);
+      if (changed) terminated.push(pid);
+      if (this.pcbTable.get(pid)?.state === 'ZOMBIE') this.reapProcess(pid);
+    }
+    return terminated;
+  }
+
   /** Mark an exited process waitable while revoking its live authority. */
   public exitProcess(pid: number, exitCode = 0): boolean {
     const pcb = this.pcbTable.get(pid);
     if (!pcb || pcb.isKernelDaemon || pcb.state === 'ZOMBIE') return false;
+    this.processStateTransitions.set(pid, (this.processStateTransitions.get(pid) || 0) + 1);
     pcb.state = 'ZOMBIE';
     pcb.exitCode = Number.isInteger(exitCode) ? exitCode : 1;
     globalIPCBus.unregisterProcess(pid);
+    // POSIX closes every descriptor at process exit, even while its PCB remains
+    // as a waitable zombie. Open file descriptions shared by fork remain alive
+    // through the other process's descriptor references.
+    pcb.fds?.clear();
     globalCapabilityManager.clearCapabilities(pid);
     globalVMPageTable.releaseProcess(pid);
     this.notifyChildWaiter(pcb);
@@ -316,7 +373,7 @@ export class TaskScheduler {
     const pcb = this.pcbTable.get(pid);
     if (!pcb || pcb.state !== 'ZOMBIE' || pcb.isKernelDaemon) return false;
     this.pcbTable.delete(pid);
-    this.processSwitches.delete(pid);
+    this.processStateTransitions.delete(pid);
     return true;
   }
 }

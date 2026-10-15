@@ -1,5 +1,6 @@
 // Behavioral User & Permission Management Commands for Earendel
 import { Command } from '../types';
+import { hashAccountPassword } from '../accountAuth';
 
 export const userCommands: Command[] = [
   {
@@ -144,7 +145,7 @@ export const userCommands: Command[] = [
     name: 'useradd',
     description: 'Create a new user (-u, -g, -d, -c, -s, -m, -o, -G)',
     category: 'sys',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       let explicitCreateHome = false;
       let explicitNoCreateHome = false;
       let shell = '/bin/bash';
@@ -287,6 +288,11 @@ export const userCommands: Command[] = [
         });
       }
 
+      const initialPasswordHash = await hashAccountPassword(username);
+      if (!initialPasswordHash) {
+        return { stdout: '', stderr: 'useradd: secure password hashing is unavailable.\n', exitCode: 1 };
+      }
+
       ctx.vfs.writeFile('/etc/group', groupLines.filter(Boolean).join('\n') + '\n', 'root');
 
       const userHome = homeDir || `/home/${username}`;
@@ -295,7 +301,7 @@ export const userCommands: Command[] = [
       ctx.vfs.writeFile('/etc/passwd', passwdContent + (passwdContent.endsWith('\n') ? '' : '\n') + newPasswdLine, 'root');
 
       const shadowContent = ctx.vfs.readFile('/etc/shadow', 'root') ?? '';
-      ctx.vfs.writeFile('/etc/shadow', shadowContent + (shadowContent.endsWith('\n') ? '' : '\n') + `${username}:${username}:19000:0:99999:7:::\n`, 'root');
+      ctx.vfs.writeFile('/etc/shadow', shadowContent + (shadowContent.endsWith('\n') ? '' : '\n') + `${username}:${initialPasswordHash}:19000:0:99999:7:::\n`, 'root');
 
       // Create home directory if -m is specified, or default create home when not explicitly disabled by -M
       const shouldCreateHome = explicitCreateHome || (!explicitNoCreateHome && !homeDir);

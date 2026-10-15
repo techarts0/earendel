@@ -26,7 +26,7 @@ export class ShellEngine {
       this.vfs,
       this.callerPid,
       this.envValues['USER'] || 'hello',
-      { allowChangeDirectory: true, liveCwd: true },
+      { allowChangeDirectory: true, liveCwd: true, abortSignal: this.abortSignal },
     );
   }
 
@@ -165,6 +165,15 @@ export class ShellEngine {
     if (process) process.user = user;
     if (user === 'root') globalCapabilityManager.grantDefaultCaps(this.callerPid);
     else globalCapabilityManager.grantUserDefaults(this.callerPid, user);
+  }
+
+  /** Keep the interactive PCB cwd aligned when login/session code changes VFS cwd. */
+  setProcessCwd(path: string): void {
+    if (typeof path !== 'string' || !path.startsWith('/')) return;
+    const resolved = this.vfs.resolvePath(path, this.envValues['USER'] || 'hello');
+    const process = globalTaskScheduler.getProcess(this.callerPid);
+    if (process) process.cwd = resolved;
+    this.envValues['PWD'] = resolved;
   }
 
   public setArray(name: string, values: string[]): void {
@@ -1149,6 +1158,9 @@ export class ShellEngine {
         prompt,
         signal: this.abortSignal,
       });
+      if (aiRes?.success === false) {
+        return { stdout: '', stderr: `ai: ${aiRes.error || 'inference request failed'}\n`, exitCode: 1 };
+      }
       return { stdout: (aiRes.response || aiRes.data || '') + '\n', stderr: '', exitCode: 0 };
     }
 
@@ -1310,7 +1322,19 @@ export class ShellEngine {
         shellEngine: this,
         history: this.history,
       };
-      res = await globalCommandRegistry.execute(cmdName, ctx);
+      try {
+        res = await globalCommandRegistry.execute(cmdName, ctx);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : String(error);
+        res = { stdout: '', stderr: `${cmdName}: ${message}\n`, exitCode: 1 };
+      }
+    }
+
+    const failedHostWrites = await this.vfs.flushPendingHostWrites();
+    if (failedHostWrites.length > 0) {
+      const uniquePaths = [...new Set(failedHostWrites)];
+      res.exitCode = res.exitCode || 1;
+      res.stderr += uniquePaths.map((path) => `-bash: ${path}: host-mounted write failed or permission was revoked\n`).join('');
     }
 
     if (redirectTarget && res.exitCode === 0) {

@@ -30,7 +30,7 @@ export class CapAgentDaemon implements IKernelAgent {
     return false;
   }
 
-  public async infer(obs: AgentObservation): Promise<AgentAction> {
+  public async infer(obs: AgentObservation, signal?: AbortSignal): Promise<AgentAction> {
     const payloadStr = `${obs.event} ${JSON.stringify(obs.payload)}`;
 
     // Fast-path intent heuristics
@@ -44,7 +44,7 @@ export class CapAgentDaemon implements IKernelAgent {
 
     // AI-driven intent inference
     const prompt = `Security Audit Event (${obs.event}): ${payloadStr}. Is this action hostile or unauthorized? Answer BLOCK or ALLOW.`;
-    const inferRes = await syscallAs(6, SyscallNo.SYS_INFER, prompt);
+    const inferRes = await syscallAs(6, SyscallNo.SYS_INFER, prompt, { signal });
     const aiResp = inferRes.data || '';
 
     const isHostile = aiResp.includes('BLOCK') || aiResp.includes('Audit') || aiResp.includes('Privileges');

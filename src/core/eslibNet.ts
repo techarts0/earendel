@@ -13,6 +13,12 @@ export const eslibNet = {
     return res.data;
   },
 
+  async closeSocket(socketId: string, syscall?: ProcessSyscall): Promise<{ success: boolean; error?: string }> {
+    if (!syscall) return { success: false, error: 'EACCES: caller identity is required' };
+    const res = await syscall(SyscallNo.SYS_NET_CLOSE, socketId);
+    return res.data || { success: false, error: res.error || 'Socket close failed' };
+  },
+
   async listen(port: number | undefined, syscall?: ProcessSyscall) {
     if (!syscall) return undefined;
     const res = await syscall(SyscallNo.SYS_NET_LISTEN, port);

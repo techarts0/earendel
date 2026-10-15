@@ -2,6 +2,7 @@
 import { Command } from '../types';
 import { globalMicrokernel } from '../../kernel/microkernel';
 import { globalIPCBus } from '../../kernel/ipcBus';
+import { globalCapabilityManager } from '../../kernel/capability';
 
 export const dmesgCommand: Command = {
   name: 'dmesg',
@@ -12,6 +13,9 @@ export const dmesgCommand: Command = {
     let out = '';
 
     if (isIPC) {
+      if (ctx.callerPid === undefined || !globalCapabilityManager.hasCapability(ctx.callerPid, 'CAP_SYS_ADMIN')) {
+        return { stdout: '', stderr: 'dmesg: permission denied; CAP_SYS_ADMIN is required for IPC traces\n', exitCode: 1 };
+      }
       const ipcLogs = globalIPCBus.getIPCLogs();
       out += `Earendel Microkernel IPC Traces (${ipcLogs.length} messages):\n`;
       out += `MSG_ID      SENDER -> TARGET  SERVICE   ACTION      PAYLOAD\n`;

@@ -21,7 +21,7 @@ Not a simulator — an OS whose hardware layer *is* the browser.
 
 ## What is this?
 
-Earendel is a POSIX-compliant microkernel OS that runs natively on the V8 JavaScript engine. It does **not** emulate x86 instructions (like v86/JSLinux) or simulate shell output (like web terminal toys). Instead, it treats the browser runtime as its hardware layer and builds real OS abstractions on top:
+Earendel is a POSIX-inspired WebOS teaching simulation built with V8 and browser APIs. It models microkernel concepts such as processes, syscalls, IPC, a virtual filesystem, and device services; it is not a POSIX-compliant host operating system or a host-kernel isolation boundary. It does **not** emulate x86 instructions (like v86/JSLinux) or merely print canned terminal output. Instead, it implements these OS concepts as browser-side services:
 
 ```
   User command: cat /etc/passwd
@@ -31,7 +31,7 @@ Earendel is a POSIX-compliant microkernel OS that runs natively on the V8 JavaSc
        → syscall(SYS_CLOSE) → IPCBus → vfsd → release fd
 ```
 
-Every operation flows through syscall dispatch, IPC message routing, and user-space daemon processing — exactly like a real microkernel.
+Operations that use the simulated syscall surface flow through syscall dispatch, IPC routing, and daemon handlers. Shell commands and other subsystems may also use their documented in-process APIs; behavior and isolation are limited to the compatibility profile below.
 
 ## Features
 
@@ -39,9 +39,9 @@ Every operation flows through syscall dispatch, IPC message routing, and user-sp
 
 - Microkernel core: IPCBus, TaskScheduler, VMPageTable
 - User-space daemons: `vfsd` (filesystem), `pmd` (process manager), `driverd` (devices), `capAgentd` (security)
-- POSIX syscalls: `SYS_FORK`, `SYS_EXECVE`, `SYS_WAITPID`, `SYS_READ/WRITE/OPEN/CLOSE`, `SYS_KILL`, `SYS_FETCH`, `SYS_INFER`, and more
+- POSIX-inspired simulated syscalls: `SYS_FORK`, `SYS_EXECVE`, `SYS_WAITPID`, `SYS_READ/WRITE/OPEN/CLOSE`, `SYS_KILL`, `SYS_FETCH`, `SYS_INFER`, and more
 - Per-process PCB with file descriptor tables, signal queues, and capability tokens
-- 100+ real Linux commands with pipes, redirects, `&&`/`||`, `for`/`if` control flow
+- 100+ Linux-style command implementations with supported subsets of pipes, redirects, `&&`/`||`, and `for`/`if` control flow
 
 ### 📁 Virtual File System
 
@@ -75,7 +75,7 @@ Built-in harness-skill agent architecture:
 - Manifest requests are intersected with caller approvals before Capabilities are issued; `/dev/skill` starts with no extra grants
 - Skill files are plain Markdown — human-readable, version-controllable
 
-Example: `skill /skills/report.md --grant-read=/home/hello/project --grant-write=/tmp/report --grant-tool=cat --grant-network`. Each grant is limited to the matching permission requested by the Skill manifest; omit grant flags to run with only the Harness scratchpad and safe built-ins.
+Example: `skill /skills/report.md --grant-read=/home/hello/project --grant-write=/tmp/report --grant-tool=cat --grant-network-host=https://api.example.com/v1`. Network access can be limited to caller-approved URL prefixes with `--grant-network-host=URL`; `--grant-network` explicitly grants unrestricted network access. Each grant is limited to permissions requested by the Skill manifest; omit grant flags to run with only the Harness scratchpad and safe built-ins.
 
 ### 🛠️ Toolchain
 

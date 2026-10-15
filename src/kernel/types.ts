@@ -18,6 +18,7 @@ export enum SyscallNo {
   SYS_NET_SOCKET = 31,
   SYS_NET_LISTEN = 32,
   SYS_NET_RESOLVE = 33,
+  SYS_NET_CLOSE = 34,
   SYS_WAYLAND = 40,
   SYS_IPC_SEND = 1001,
   SYS_IPC_RECV = 1002,
@@ -48,6 +49,8 @@ export interface FileDescriptor {
 export interface ProcessControlBlock {
   pid: number;
   ppid: number;
+  /** Stable process-group identity; survives PPID reparenting for session cleanup. */
+  processGroupId?: string;
   name: string;
   user: string;
   state: TaskState;

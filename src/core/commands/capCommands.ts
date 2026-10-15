@@ -1,5 +1,6 @@
 import { Command } from '../types';
 import { globalCapabilityManager, CapabilityType } from '../../kernel/capability';
+import { globalTaskScheduler } from '../../kernel/taskScheduler';
 
 const CAPABILITIES: CapabilityType[] = ['CAP_VFS_READ', 'CAP_VFS_WRITE', 'CAP_DEVICE_IO', 'CAP_SYS_ADMIN', 'CAP_KILL', 'CAP_NET_ADMIN'];
 const isPid = (value: string | undefined): number | null => {
@@ -37,6 +38,10 @@ export const capCommands: Command[] = [
       if (ctx.callerPid === undefined || !globalCapabilityManager.hasCapability(ctx.callerPid, 'CAP_SYS_ADMIN')) {
         return { stdout: '', stderr: 'cap-grant: permission denied; CAP_SYS_ADMIN is required\n', exitCode: 1 };
       }
+      const target = globalTaskScheduler.getProcess(pid);
+      if (!target || target.state !== 'RUNNING') {
+        return { stdout: '', stderr: `cap-grant: target PID ${pid} is not running\n`, exitCode: 1 };
+      }
       if (!globalCapabilityManager.grantCapability(pid, cap, scope)) return { stdout: '', stderr: 'cap-grant: grant rejected\n', exitCode: 1 };
       return { stdout: `Granted '${cap}' to PID ${pid} for '${scope}'.\n`, stderr: '', exitCode: 0 };
     },
@@ -52,6 +57,10 @@ export const capCommands: Command[] = [
       }
       if (ctx.callerPid === undefined || !globalCapabilityManager.hasCapability(ctx.callerPid, 'CAP_SYS_ADMIN')) {
         return { stdout: '', stderr: 'cap-revoke: permission denied; CAP_SYS_ADMIN is required\n', exitCode: 1 };
+      }
+      const target = globalTaskScheduler.getProcess(pid);
+      if (!target || target.state !== 'RUNNING') {
+        return { stdout: '', stderr: `cap-revoke: target PID ${pid} is not running\n`, exitCode: 1 };
       }
       if (!globalCapabilityManager.revokeCapability(pid, cap, scope)) {
         return { stdout: '', stderr: 'cap-revoke: no matching grant\n', exitCode: 1 };

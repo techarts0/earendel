@@ -20,10 +20,10 @@ export const aptCommands: Command[] = [
       }
 
       if (sub === 'update') {
-        return globalPkgManager.updateFromRemoteRepo().then((res) => ({
+        return globalPkgManager.updateFromRemoteRepo(ctx.callerPid ?? -1).then((res) => ({
           stdout: `${res.log}\n`,
-          stderr: '',
-          exitCode: 0,
+          stderr: res.success ? '' : `${res.log}\n`,
+          exitCode: res.success ? 0 : 1,
         }));
       }
 
@@ -49,7 +49,7 @@ export const aptCommands: Command[] = [
           };
         }
 
-        return globalPkgManager.installPackage(targetPkg).then((res) => {
+        return globalPkgManager.installPackage(targetPkg, ctx.callerPid ?? -1).then((res) => {
           if (!res.success) {
             return { stdout: '', stderr: `${res.message}\n`, exitCode: 100 };
           }
@@ -76,7 +76,7 @@ export const aptCommands: Command[] = [
           };
         }
 
-        return globalPkgManager.upgradePackages().then((res) => {
+        return globalPkgManager.upgradePackages(ctx.callerPid ?? -1).then((res) => {
           return { stdout: res.log + '\n', stderr: '', exitCode: res.success ? 0 : 1 };
         });
       }

@@ -21,6 +21,17 @@ const MAX_SKILL_RESPONSE_CHARS = 32_768;
 const MAX_SKILL_ACTIONS = 128;
 const MAX_SKILL_COMMAND_CHARS = 4_096;
 const MAX_SKILL_OUTPUT_CHARS = 64_000;
+const MAX_SKILL_PROMPT_CHARS = 128_000;
+const MAX_SKILL_BODY_CHARS = 48_000;
+const MAX_SKILL_INPUT_CHARS = 16_000;
+const MAX_SKILL_REFERENCE_CHARS = 24_000;
+
+/** MCP grants are tool-specific: approving one server must not approve all of
+ * its current and future tools.
+ */
+export function isMcpToolApproved(approvedTools: string[], serverName: string, toolName: string): boolean {
+  return approvedTools.includes(`${serverName}/${toolName}`);
+}
 
 function boundSkillOutput(output: string): { text: string; truncated: boolean } {
   return output.length > MAX_SKILL_OUTPUT_CHARS
@@ -114,11 +125,55 @@ function intersectNames(requested: unknown, approved: unknown, caseInsensitive =
     .map(entry => caseInsensitive ? entry.toLowerCase() : entry))];
 }
 
+function normalizeNetworkScope(value: unknown): URL | null {
+  if (typeof value !== 'string') return null;
+  try {
+    const url = new URL(value);
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) return null;
+    url.search = '';
+    url.hash = '';
+    url.pathname = url.pathname.replace(/\/+$/, '') || '/';
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function normalizeNetworkScopes(values: unknown): string[] {
+  if (!Array.isArray(values)) return [];
+  return [...new Set(values
+    .map(normalizeNetworkScope)
+    .filter((url): url is URL => url !== null)
+    .map((url) => url.origin + url.pathname))];
+}
+
+/** Intersect Skill URL requests and caller approvals, returning the narrower prefixes. */
+export function intersectNetworkScopes(requested: unknown, approved: unknown): string[] {
+  if (!Array.isArray(requested) || !Array.isArray(approved)) return [];
+  const effective = new Set<string>();
+  for (const requestValue of requested) {
+    const request = normalizeNetworkScope(requestValue);
+    if (!request) continue;
+    for (const approvedValue of approved) {
+      const approval = normalizeNetworkScope(approvedValue);
+      if (!approval || approval.origin !== request.origin) continue;
+      const requestPath = request.pathname;
+      const approvalPath = approval.pathname;
+      const contains = (parent: string, child: string) =>
+        parent === '/' || child === parent || child.startsWith(`${parent}/`);
+      if (contains(approvalPath, requestPath)) effective.add(request.origin + requestPath);
+      else if (contains(requestPath, approvalPath)) effective.add(request.origin + approvalPath);
+    }
+  }
+  return [...effective];
+}
+
 function commandPermissionError(
   tokens: string[],
   manifest: ParsedSkill['manifest'],
   execCtx: ExecutionContext,
   scratchpadDir: string,
+  skillPid: number,
 ): string | null {
   const command = (tokens[0].split('/').pop() || '').toLowerCase();
   if (STATEFUL_OR_RECURSIVE_COMMANDS.has(command)) {
@@ -145,6 +200,20 @@ function commandPermissionError(
     return `Command '${command}' requires permissions.network: true.`;
   }
   if (networkCommands.has(command)) {
+    if (!['curl', 'wget', 'fetch'].includes(command)) {
+      return `Command '${command}' has no reviewed Skill network profile and is denied.`;
+    }
+    if (command === 'curl' || command === 'wget' || command === 'fetch') {
+      const requestUrls = tokens.slice(1).flatMap((token) => {
+        if (token.startsWith('--url=')) return [token.slice('--url='.length)];
+        return /^https?:\/\//i.test(token) ? [token] : [];
+      });
+      if (requestUrls.length === 0) return `Command '${command}' requires an explicit HTTP(S) URL.`;
+      if (!globalTaskScheduler.getProcess(skillPid) || requestUrls.some((url) =>
+        !globalCapabilityManager.hasCapability(skillPid, 'CAP_NET_ADMIN', url))) {
+        return `Command '${command}' URL is outside the Skill's caller-approved network scope.`;
+      }
+    }
     const outputIndex = tokens.findIndex(token => token === '-o' || token === '--output');
     let outputPath = outputIndex >= 0 ? tokens[outputIndex + 1] : undefined;
     if (command === 'wget') {
@@ -207,7 +276,10 @@ function commandPermissionError(
   if (command === 'grep') readPaths = operands.slice(1);
   if (command === 'cp' || command === 'mv') {
     readPaths = operands.slice(0, -1);
-    writePaths = operands.slice(-1);
+    // `mv` mutates both sides: it creates the destination and removes the
+    // source after copying. Requiring write scope on only the destination
+    // would let the manifest understate the source-side authority it requests.
+    writePaths = command === 'mv' ? operands : operands.slice(-1);
   }
   if (command === 'ecc') {
     // ECC input operands are reads; -o output paths are writes.
@@ -265,12 +337,14 @@ interface FsmContext {
   approvedWriteScopes: string[];
   approvedSystemTools: string[];
   approvedMcpTools: string[];
+  approvedNetworkScopes: string[];
   networkApproved: boolean;
   memoryApproved: boolean;
   timeoutMs: number;
   startTime: number;
   abortController: AbortController;
   auditEvents: Array<{ at: string; action: string; detail: string }>;
+  auditDroppedEvents: number;
   onProgress?: (state: HarnessState, message: string) => void;
 }
 
@@ -278,8 +352,19 @@ export class HarnessEngine {
   private nextSkillPid = 1_000_000;
 
   private recordAudit(ctx: FsmContext, action: string, detail: string): void {
-    if (ctx.auditEvents.length >= 500) ctx.auditEvents.shift();
-    ctx.auditEvents.push({ at: new Date().toISOString(), action, detail: detail.slice(0, 240) });
+    const at = new Date().toISOString();
+    if (ctx.auditEvents.length < 499) {
+      ctx.auditEvents.push({ at, action, detail: detail.slice(0, 240) });
+      return;
+    }
+    ctx.auditDroppedEvents++;
+    const truncation = {
+      at,
+      action: 'audit-truncated',
+      detail: `${ctx.auditDroppedEvents} event(s) omitted after the 500-event session audit limit.`,
+    };
+    if (ctx.auditEvents[499]?.action === 'audit-truncated') ctx.auditEvents[499] = truncation;
+    else ctx.auditEvents.push(truncation);
   }
 
   private waitUntilDeadline<T>(operation: Promise<T>, ctx: FsmContext): Promise<T> {
@@ -387,15 +472,19 @@ export class HarnessEngine {
     userProvidedInputs?: Record<string, any>,
     permissionGrant: SkillPermissionGrant = {},
   ): Promise<ExecutionResult> {
+    if (!globalTaskScheduler.canCreateProcess()) {
+      return { stdout: '', stderr: 'Harness: EAGAIN: process table is full', exitCode: 1 };
+    }
     while (globalTaskScheduler.getProcess(this.nextSkillPid)) this.nextSkillPid++;
     if (!Number.isSafeInteger(this.nextSkillPid)) {
       return { stdout: '', stderr: 'Harness: no process identifiers remain', exitCode: 1 };
     }
     const pid = this.nextSkillPid++;
-    const sessionId = `session_${Date.now()}`;
+    const sessionId = `session_${Date.now()}_${pid}`;
     globalTaskScheduler.createProcess({
       pid,
       ppid: execCtx.callerPid ?? 0,
+      processGroupId: sessionId,
       name: `[skill] ${sessionId}`,
       user: execCtx.env.USER || 'hello',
       state: 'RUNNING',
@@ -405,12 +494,18 @@ export class HarnessEngine {
       cpuUsagePercent: 0,
       cwd: execCtx.vfs.getPwd(),
     });
+    // Inference is the Skill engine's built-in execution primitive. Grant only
+    // the AI device to this isolated PID; manifest network/tool permissions
+    // remain independently denied until explicitly approved.
+    globalCapabilityManager.grantCapability(pid, 'CAP_DEVICE_IO', '/dev/ai');
     const scratchpadDir = globalAgentMemoryManager.allocateScratchpad(execCtx.vfs, pid);
     const abortController = new AbortController();
     const abortFromCaller = () => abortController.abort(execCtx.abortSignal?.reason ?? new Error('Skill execution cancelled'));
     if (execCtx.abortSignal?.aborted) abortFromCaller();
     else execCtx.abortSignal?.addEventListener('abort', abortFromCaller, { once: true });
-    const skillVfs = createCapabilityVfsView(execCtx.vfs, pid, execCtx.env.USER || 'hello');
+    const skillVfs = createCapabilityVfsView(execCtx.vfs, pid, execCtx.env.USER || 'hello', {
+      abortSignal: abortController.signal,
+    });
     const skillShell = new ShellEngine(skillVfs, execCtx.processManager);
     skillShell.lang = execCtx.lang;
     skillShell.callerPid = pid;
@@ -435,17 +530,20 @@ export class HarnessEngine {
       approvedWriteScopes: [],
       approvedSystemTools: [],
       approvedMcpTools: [],
+      approvedNetworkScopes: [],
       networkApproved: false,
       memoryApproved: false,
       timeoutMs: 60000,
       startTime: Date.now(),
       abortController,
       auditEvents: [],
+      auditDroppedEvents: 0,
       onProgress,
     };
 
     let currentState: HarnessState = HarnessState.PARSE;
     let cmdExecutionCounter = 0;
+    let auditPersistenceFailed = false;
 
     try {
       while (currentState !== HarnessState.SUCCESS && currentState !== HarnessState.ERROR) {
@@ -480,16 +578,36 @@ export class HarnessEngine {
             }
 
             const manifest = parsed.manifest;
+            if (parsed.body.length > MAX_SKILL_BODY_CHARS) {
+              ctx.lastErrorOutput = `Skill instructions exceed the ${MAX_SKILL_BODY_CHARS}-character context limit.`;
+              this.appendLog(ctx, HarnessState.ERROR, ctx.lastErrorOutput, '31');
+              currentState = HarnessState.ERROR;
+              break;
+            }
+            if (manifest.references !== undefined &&
+                (!Array.isArray(manifest.references) || manifest.references.length > 16)) {
+              ctx.lastErrorOutput = 'Skill references must be an array containing at most 16 paths.';
+              this.appendLog(ctx, HarnessState.ERROR, ctx.lastErrorOutput, '31');
+              currentState = HarnessState.ERROR;
+              break;
+            }
             ctx.approvedReadScopes = intersectPermissionScopes(manifest.permissions?.vfs_read, permissionGrant.vfs_read, execCtx);
             ctx.approvedWriteScopes = intersectPermissionScopes(manifest.permissions?.vfs_write, permissionGrant.vfs_write, execCtx);
             ctx.approvedSystemTools = intersectNames(manifest.tools?.system, permissionGrant.system_tools, true);
             ctx.approvedMcpTools = intersectNames(manifest.tools?.mcp, permissionGrant.mcp_tools);
-            ctx.networkApproved = manifest.permissions?.network === true && permissionGrant.network === true;
+            const requestedNetworkHosts = manifest.permissions?.network_hosts;
+            const hasExplicitNetworkHosts = Array.isArray(requestedNetworkHosts) && requestedNetworkHosts.length > 0;
+            ctx.approvedNetworkScopes = permissionGrant.network === true
+              ? (hasExplicitNetworkHosts ? normalizeNetworkScopes(requestedNetworkHosts) : ['*'])
+              : intersectNetworkScopes(requestedNetworkHosts, permissionGrant.network_hosts);
+            ctx.networkApproved = manifest.permissions?.network === true &&
+              ctx.approvedNetworkScopes.length > 0;
             ctx.memoryApproved = manifest.context_mode === 'inherit' && permissionGrant.memory === true;
             this.recordAudit(ctx, 'permission-request', JSON.stringify({
               read: manifest.permissions?.vfs_read || [],
               write: manifest.permissions?.vfs_write || [],
               network: manifest.permissions?.network === true,
+              network_hosts: manifest.permissions?.network_hosts || [],
               tools: manifest.tools?.system || [],
               mcp: manifest.tools?.mcp || [],
               memory: manifest.context_mode === 'inherit',
@@ -498,6 +616,7 @@ export class HarnessEngine {
               read: ctx.approvedReadScopes,
               write: ctx.approvedWriteScopes,
               network: ctx.networkApproved,
+              network_hosts: ctx.approvedNetworkScopes,
               tools: ctx.approvedSystemTools,
               mcp: ctx.approvedMcpTools,
               memory: ctx.memoryApproved,
@@ -508,6 +627,7 @@ export class HarnessEngine {
               tools: ctx.approvedSystemTools,
               mcp: ctx.approvedMcpTools,
               network: ctx.networkApproved,
+              networkHosts: ctx.approvedNetworkScopes,
               memory: ctx.memoryApproved,
             }).slice(0, 800)}`);
             for (const scope of ctx.approvedReadScopes) {
@@ -517,7 +637,9 @@ export class HarnessEngine {
               globalCapabilityManager.grantCapability(pid, 'CAP_VFS_WRITE', scope);
             }
             if (ctx.networkApproved) {
-              globalCapabilityManager.grantCapability(pid, 'CAP_NET_ADMIN', '*');
+              for (const scope of ctx.approvedNetworkScopes) {
+                globalCapabilityManager.grantCapability(pid, 'CAP_NET_ADMIN', scope);
+              }
             }
             globalCapabilityManager.grantCapability(pid, 'CAP_VFS_READ', scratchpadDir);
             globalCapabilityManager.grantCapability(pid, 'CAP_VFS_WRITE', scratchpadDir);
@@ -544,10 +666,22 @@ export class HarnessEngine {
               break;
             }
             ctx.resolvedInputs = validation.parsedInputs;
+            let serializedInputs: string;
+            try {
+              serializedInputs = JSON.stringify(ctx.resolvedInputs, null, 2);
+            } catch {
+              serializedInputs = '';
+            }
+            if (!serializedInputs || serializedInputs.length > MAX_SKILL_INPUT_CHARS) {
+              ctx.lastErrorOutput = `Skill inputs must serialize to between 1 and ${MAX_SKILL_INPUT_CHARS} characters.`;
+              this.appendLog(ctx, HarnessState.ERROR, ctx.lastErrorOutput, '31');
+              currentState = HarnessState.ERROR;
+              break;
+            }
             this.appendLog(
               ctx,
               currentState,
-              `Resolved Inputs: ${JSON.stringify(ctx.resolvedInputs)}`
+              `Resolved Inputs: ${serializedInputs}`
             );
 
             // 2. System tools are opt-in. A missing or empty allowlist grants no
@@ -559,7 +693,7 @@ export class HarnessEngine {
             try {
               const allMcpTools = await this.waitUntilDeadline(globalMcpClientManager.listTools(), ctx);
               const filteredMcp = ctx.networkApproved
-                ? allMcpTools.filter((t) => ctx.approvedMcpTools.includes(t.serverName) || ctx.approvedMcpTools.includes(`${t.serverName}/${t.name}`))
+                ? allMcpTools.filter((t) => isMcpToolApproved(ctx.approvedMcpTools, t.serverName, t.name))
                 : [];
               mcpToolsDesc = filteredMcp.map((t) => `${t.serverName}/${t.name} (${t.description})`).join(', ');
             } catch (e) {}
@@ -568,10 +702,12 @@ export class HarnessEngine {
             let referencesText = '';
             if (manifest.references && manifest.references.length > 0) {
               const refSnippets: string[] = [];
+              let referenceCharsRemaining = MAX_SKILL_REFERENCE_CHARS;
+              let referencesTruncated = false;
               let referenceDenied = false;
               for (const refPath of manifest.references) {
                 const user = execCtx.env['USER'] || 'hello';
-                if (typeof refPath !== 'string' || !ctx.approvedReadScopes.some(scope =>
+                if (typeof refPath !== 'string' || refPath.length > 1024 || !ctx.approvedReadScopes.some(scope =>
                   pathInPermissionScope(execCtx.vfs, refPath, scope, execCtx),
                 )) {
                   ctx.lastErrorOutput = `Reference denied: '${String(refPath)}' is outside the caller-approved read scopes.`;
@@ -579,9 +715,38 @@ export class HarnessEngine {
                   referenceDenied = true;
                   break;
                 }
-                const refContent = execCtx.vfs.readFile(refPath, execCtx.env['USER'] || 'hello');
+                if (referenceCharsRemaining <= 0) {
+                  referencesTruncated = true;
+                  continue;
+                }
+                // References are prompt input, so they must pass through the same
+                // PID-scoped VFS and live Capability checks as Skill commands.
+                // Reading from execCtx.vfs here would bypass the kernel policy
+                // after the lexical scope check (for example through symlinks).
+                const referenceVfs = createCapabilityVfsView(
+                  execCtx.vfs,
+                  pid,
+                  user,
+                  { abortSignal: ctx.abortController.signal },
+                );
+                const refContent = referenceVfs.readFile(refPath);
                 if (refContent) {
-                  refSnippets.push(`--- Reference: ${refPath} ---\n${refContent.trim()}`);
+                  const header = `--- Reference: ${refPath} ---\n`;
+                  const marker = '\n[Reference truncated by Skill context limit]';
+                  if (referenceCharsRemaining <= header.length) {
+                    referencesTruncated = true;
+                    continue;
+                  }
+                  const available = Math.max(0, referenceCharsRemaining - header.length);
+                  const excerpt = refContent.length > available
+                    ? available >= marker.length
+                      ? `${refContent.slice(0, available - marker.length)}${marker}`
+                      : marker.slice(0, available)
+                    : refContent;
+                  const snippet = `${header}${excerpt}`;
+                  refSnippets.push(snippet);
+                  referenceCharsRemaining -= snippet.length;
+                  if (refContent.length > available) referencesTruncated = true;
                 }
               }
               if (referenceDenied) {
@@ -589,7 +754,7 @@ export class HarnessEngine {
                 break;
               }
               if (refSnippets.length > 0) {
-                referencesText = `\n\n### Attached References & Documentation:\n${refSnippets.join('\n\n')}`;
+                referencesText = `\n\n### Attached References & Documentation:\n${refSnippets.join('\n\n')}${referencesTruncated ? '\n[Additional reference content omitted by context limit]' : ''}`;
               }
             }
 
@@ -620,6 +785,7 @@ export class HarnessEngine {
 Skill Description: ${manifest.description || 'N/A'}
 Authorized System Tools: [${systemTools}].
 Authorized MCP Tools: [${mcpToolsDesc || 'none'}].
+Authorized Network URL Prefixes: [${ctx.networkApproved ? ctx.approvedNetworkScopes.join(', ') || 'none' : 'none'}].
 Timeout: ${manifest.timeout || '60s'}.
 Active Scratchpad Sandbox: ${ctx.scratchpadDir} (Use for intermediate files or inspection).
 
@@ -633,7 +799,7 @@ Keep bash commands concise, deterministic, and verify outputs.
 
 Inputs Provided:
 \`\`\`json
-${JSON.stringify(ctx.resolvedInputs, null, 2)}
+${serializedInputs}
 \`\`\`
 ${constraintsText}
 ${referencesText}
@@ -642,6 +808,13 @@ ${lessonsLearnedText}
 
 ### Skill Execution Instructions (Body):
 ${parsed.body}`;
+
+            if (sysPrompt.length > MAX_SKILL_PROMPT_CHARS) {
+              ctx.lastErrorOutput = `Assembled Skill prompt exceeds the ${MAX_SKILL_PROMPT_CHARS}-character limit.`;
+              this.appendLog(ctx, HarnessState.ERROR, ctx.lastErrorOutput, '31');
+              currentState = HarnessState.ERROR;
+              break;
+            }
 
             ctx.conversationHistory.push(sysPrompt);
             currentState = HarnessState.INFER;
@@ -654,6 +827,9 @@ ${parsed.body}`;
             try {
               // L1 Working Memory: Condense history to roll up older turns
               const promptContext = globalAgentMemoryManager.condenseHistory(ctx.conversationHistory);
+              if (promptContext.length > MAX_SKILL_PROMPT_CHARS) {
+                throw new Error(`Skill conversation exceeds the ${MAX_SKILL_PROMPT_CHARS}-character inference limit.`);
+              }
               const res = await this.waitUntilDeadline(
                 globalIPCBus.sendIPC(globalIPCBus.getProcessEndpoint(ctx.pid), 'driverd', 'DEV_WRITE_AI', { prompt: promptContext, signal: ctx.abortController.signal }),
                 ctx,
@@ -693,6 +869,7 @@ ${parsed.body}`;
                 vfs_read: ctx.approvedReadScopes,
                 vfs_write: ctx.approvedWriteScopes,
                 network: ctx.networkApproved,
+                network_hosts: ctx.approvedNetworkScopes,
               },
               tools: {
                 ...manifest!.tools,
@@ -727,12 +904,15 @@ ${parsed.body}`;
                 cmdExecutionCounter++;
                 try {
                   const mcpObj = JSON.parse(block.code);
-                  const [serverName, toolName] = (mcpObj.mcp || '').split('/');
+                  const mcpIdentifier = typeof mcpObj.mcp === 'string' ? mcpObj.mcp : '';
+                  const separator = mcpIdentifier.indexOf('/');
+                  const serverName = separator > 0 ? mcpIdentifier.slice(0, separator) : '';
+                  const toolName = separator > 0 ? mcpIdentifier.slice(separator + 1) : '';
                   
                   // Both the named tool and the network permission are required.
                   const fullMcpName = `${serverName}/${toolName}`;
                   const allowedMcp = ctx.approvedMcpTools;
-                  if (!ctx.networkApproved || (!allowedMcp.includes(serverName) && !allowedMcp.includes(fullMcpName))) {
+                  if (!serverName || !toolName || !ctx.networkApproved || !isMcpToolApproved(allowedMcp, serverName, toolName)) {
                     this.recordAudit(ctx, 'mcp-denied', fullMcpName || 'invalid-tool');
                     throw new Error(`Security Interception: MCP tool '${fullMcpName}' requires permissions.network: true and an explicit tools.mcp entry.`);
                   }
@@ -740,7 +920,7 @@ ${parsed.body}`;
                   this.appendLog(ctx, currentState, `Invoking MCP Tool: ${mcpObj.mcp}`, '35');
                   this.recordAudit(ctx, 'mcp-call', fullMcpName);
                   const mcpResult = await this.waitUntilDeadline(
-                    globalMcpClientManager.callTool(serverName, toolName || 'default', mcpObj.args || {}, ctx.abortController.signal),
+                    globalMcpClientManager.callTool(serverName, toolName, mcpObj.args || {}, ctx.abortController.signal, ctx.pid),
                     ctx,
                   );
                   const rawMcpStr = JSON.stringify(mcpResult, null, 2) ?? String(mcpResult);
@@ -756,7 +936,10 @@ ${parsed.body}`;
                       `mcp_${cmdExecutionCounter}.json`,
                       boundedMcpOutput.text
                     );
-                    displayedOut = `[MCP result (${boundedMcpOutput.text.length} chars) saved to ${rawPath}]\n${this.pruneOutputForContext(boundedMcpOutput.text)}`;
+                    displayedOut = rawPath
+                      ? `[MCP result (${boundedMcpOutput.text.length} chars) saved to ${rawPath}]\n${this.pruneOutputForContext(boundedMcpOutput.text)}`
+                      : this.pruneOutputForContext(boundedMcpOutput.text);
+                    if (!rawPath) this.recordAudit(ctx, 'scratchpad-write-failed', 'MCP result could not be persisted');
                   } else {
                     displayedOut = this.pruneOutputForContext(boundedMcpOutput.text);
                   }
@@ -784,7 +967,11 @@ ${parsed.body}`;
                   // Reject shell composition before checking authority for its one command.
                   const tokens = isSingleCommand(line) ? commandTokens(line) : null;
                   const rawCommand = tokens?.[0] || '';
-                  const cmdBinary = rawCommand.split('/').pop() || '';
+                  // Skills may invoke only command names resolved through the
+                  // reviewed command registry/PATH. A path such as
+                  // /home/user/cat could be an arbitrary executable script;
+                  // approving it by basename would bypass per-command review.
+                  const cmdBinary = rawCommand.includes('/') ? '' : rawCommand;
                   const declaredTools = ctx.approvedSystemTools;
                   if (!tokens || !cmdBinary || (!SAFE_HARNESS_BUILTINS.includes(cmdBinary) && !declaredTools.includes(cmdBinary))) {
                     allSucceeded = false;
@@ -795,7 +982,7 @@ ${parsed.body}`;
                     this.recordAudit(ctx, 'command-denied', cmdBinary || 'invalid-command');
                     break;
                   }
-                  const permissionError = commandPermissionError(tokens, effectiveManifest, execCtx, ctx.scratchpadDir);
+                  const permissionError = commandPermissionError(tokens, effectiveManifest, execCtx, ctx.scratchpadDir, ctx.pid);
                   if (permissionError) {
                     allSucceeded = false;
                     ctx.lastErrorOutput = `Security Interception: ${permissionError}`;
@@ -831,7 +1018,10 @@ ${parsed.body}`;
                         `stdout_${cmdExecutionCounter}.raw`,
                         stdout.text
                       );
-                      displayedOut = `[Output (${stdout.text.length} chars) saved to ${rawPath}]\n${this.pruneOutputForContext(displayedOut)}`;
+                      displayedOut = rawPath
+                        ? `[Output (${stdout.text.length} chars) saved to ${rawPath}]\n${this.pruneOutputForContext(displayedOut)}`
+                        : this.pruneOutputForContext(displayedOut);
+                      if (!rawPath) this.recordAudit(ctx, 'scratchpad-write-failed', `${cmdBinary} output could not be persisted`);
                     } else {
                       displayedOut = this.pruneOutputForContext(displayedOut);
                     }
@@ -890,8 +1080,17 @@ ${parsed.body}`;
     } finally {
       execCtx.abortSignal?.removeEventListener('abort', abortFromCaller);
       abortController.abort(new Error('Skill process exited'));
-      const effectiveCapabilities = globalCapabilityManager.getCapabilityTokens(ctx.pid)
-        .map(({ type, resourceTarget }) => ({ type, scope: resourceTarget }));
+      const effectiveCapabilities = globalTaskScheduler.getAllProcesses()
+        .filter((process) => process.processGroupId === ctx.sessionId)
+        .flatMap((process) => globalCapabilityManager.getCapabilityTokens(process.pid)
+          .map(({ type, resourceTarget }) => ({ pid: process.pid, type, scope: resourceTarget })));
+      try {
+        // A forked Skill child inherits the Skill's scoped capabilities. Revoke
+        // the whole subtree before cleaning session memory or writing the audit.
+        globalTaskScheduler.terminateProcessGroup(ctx.sessionId, ctx.pid, 143);
+      } catch (error) {
+        console.error(`[Harness] Failed to terminate Skill process tree for PID ${ctx.pid}:`, error);
+      }
       try {
         if (currentState === HarnessState.SUCCESS && ctx.hadReflexion && ctx.parsedSkill) {
           globalAgentMemoryManager.recordLesson(
@@ -914,11 +1113,11 @@ ${parsed.body}`;
           globalCapabilityManager.clearCapabilities(ctx.pid);
         } finally {
           try {
-            globalTaskScheduler.terminateProcess(ctx.pid);
+            globalTaskScheduler.terminateProcessGroup(ctx.sessionId, ctx.pid, 143);
           } finally {
-            this.recordAudit(ctx, 'capabilities-revoked', `PID ${ctx.pid}`);
+            this.recordAudit(ctx, 'capabilities-revoked', `process group ${ctx.sessionId}`);
             try {
-              globalAgentMemoryManager.appendSessionAudit(execCtx.vfs, {
+              const auditPersisted = await globalAgentMemoryManager.appendSessionAudit(execCtx.vfs, {
                 timestamp: new Date().toISOString(),
                 sessionId: ctx.sessionId,
                 pid: ctx.pid,
@@ -928,13 +1127,22 @@ ${parsed.body}`;
                 error: currentState === HarnessState.ERROR ? ctx.lastErrorOutput : undefined,
                 capabilities: effectiveCapabilities,
                 events: [...ctx.auditEvents],
+                droppedEvents: ctx.auditDroppedEvents,
               });
+              if (!auditPersisted) auditPersistenceFailed = true;
             } catch (error) {
+              auditPersistenceFailed = true;
               console.error('[Harness] Failed to persist Skill audit record:', error);
             }
           }
         }
       }
+    }
+
+    if (auditPersistenceFailed) {
+      currentState = HarnessState.ERROR;
+      ctx.lastErrorOutput = 'Skill execution failed: the session audit record could not be persisted.';
+      this.appendLog(ctx, HarnessState.ERROR, ctx.lastErrorOutput, '31');
     }
 
     if (currentState === HarnessState.SUCCESS) {

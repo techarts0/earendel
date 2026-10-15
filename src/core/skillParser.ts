@@ -18,6 +18,8 @@ export interface SkillPermissionsDef {
   vfs_write?: string[];
   /** Allows external network tools, MCP calls, and the configured remote LLM. */
   network?: boolean;
+  /** Optional URL prefix allowlist; each entry is an HTTP(S) origin or URL path prefix. */
+  network_hosts?: string[];
 }
 
 export interface SkillManifest {
@@ -43,6 +45,7 @@ export interface SkillPermissionGrant {
   system_tools?: string[];
   mcp_tools?: string[];
   network?: boolean;
+  network_hosts?: string[];
   memory?: boolean;
 }
 

@@ -3,6 +3,7 @@ import { globalVFS } from './vfs';
 import { Command, ExecutionContext } from './types';
 import { globalWasmEngine } from './wasmRuntime';
 import { globalJsEngine } from './jsRuntime';
+import { checkNetworkRequest } from './networkAccessPolicy';
 
 export interface PackageMeta {
   name: string;
@@ -28,10 +29,12 @@ class PkgManager {
     return this.repoBaseUrl;
   }
 
-  public async updateFromRemoteRepo(): Promise<{ success: boolean; log: string }> {
+  public async updateFromRemoteRepo(callerPid: number): Promise<{ success: boolean; log: string }> {
     const packagesUrl = `${this.repoBaseUrl}/packages`;
+    const denied = checkNetworkRequest(callerPid, packagesUrl);
+    if (denied) return { success: false, log: denied };
     try {
-      const res = await fetch(packagesUrl);
+      const res = await fetch(packagesUrl, { redirect: 'error' });
       if (!res.ok) throw new Error(`HTTP ${res.status}: ${res.statusText}`);
 
       const remotePkgs: any = await res.json();
@@ -326,7 +329,7 @@ class PkgManager {
     return Array.from(this.repo.values());
   }
 
-  public async installPackage(nameOrUrl: string): Promise<{ success: boolean; message: string }> {
+  public async installPackage(nameOrUrl: string, callerPid: number): Promise<{ success: boolean; message: string }> {
     let pkg = this.repo.get(nameOrUrl);
     let fetchUrl = '';
 
@@ -343,9 +346,12 @@ class PkgManager {
       return { success: true, message: `${pkg.name} is already the newest version (${pkg.version}).` };
     }
 
+    const denied = checkNetworkRequest(callerPid, fetchUrl);
+    if (denied) return { success: false, message: denied };
+
     // Perform authentic network fetch for package bundle payload
     try {
-      const res = await fetch(fetchUrl);
+      const res = await fetch(fetchUrl, { redirect: 'error' });
       if (!res.ok) {
         return {
           success: false,
@@ -520,7 +526,7 @@ class PkgManager {
     };
   }
 
-  public async upgradePackages(): Promise<{ success: boolean; log: string }> {
+  public async upgradePackages(callerPid: number): Promise<{ success: boolean; log: string }> {
     const installed = Array.from(this.repo.values()).filter((p) => p.installed);
     const upgradable: { pkg: PackageMeta; newVer: string }[] = [];
 
@@ -567,7 +573,7 @@ class PkgManager {
     ];
 
     for (const item of upgradable) {
-      const res = await this.installPackage(item.pkg.name);
+      const res = await this.installPackage(item.pkg.name, callerPid);
       upgradeLog.push(`Preparing to unpack .../${item.pkg.name}_${item.newVer}_all.ear ...`);
       upgradeLog.push(`Unpacking ${item.pkg.name} (${item.newVer}) over (${item.pkg.version}) ...`);
       upgradeLog.push(`Setting up ${item.pkg.name} (${item.newVer}) ...`);

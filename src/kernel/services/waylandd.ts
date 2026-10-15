@@ -28,7 +28,20 @@ export class WaylandCompositorDaemon {
   private topZIndex: number = 100;
 
   constructor() {
+    globalIPCBus.onProcessExit((pid) => this.removeClientSurfaces(pid));
     this.initService();
+  }
+
+  private removeClientSurfaces(pid: number): void {
+    let removedAny = false;
+    for (const [id, surface] of this.surfaces) {
+      if (surface.ownerPid !== pid) continue;
+      this.surfaces.delete(id);
+      removedAny = true;
+    }
+    if (removedAny && this.surfaces.size === 0) {
+      try { globalFramebufferEngine.closeWindow(); } catch (_) {}
+    }
   }
 
   private initService() {
@@ -49,6 +62,9 @@ export class WaylandCompositorDaemon {
 
     switch (action) {
       case 'SYS_WAYLAND_CREATE_SURFACE': {
+        if (!globalCapabilityManager.hasCapability(msg.senderPid, 'CAP_DEVICE_IO', '/dev/wayland') && !isAdmin) {
+          return { success: false, error: 'EACCES: creating a Wayland surface requires CAP_DEVICE_IO for /dev/wayland' };
+        }
         const id = `surf_${msg.senderPid}_${Math.random().toString(36).substring(2, 10)}`;
         const dimension = (value: unknown, fallback: number) => {
           const parsed = Number(value);
@@ -121,6 +137,9 @@ export class WaylandCompositorDaemon {
 
       case 'SYS_WAYLAND_FLUSH_FRAMEBUFFER': {
         if (!owns(payload?.id) && !isAdmin) return { success: false, error: 'EACCES: framebuffer surface belongs to another process' };
+        if (!globalCapabilityManager.hasCapability(msg.senderPid, 'CAP_DEVICE_IO', '/dev/fb0') && !isAdmin) {
+          return { success: false, error: 'EACCES: framebuffer access requires CAP_DEVICE_IO for /dev/fb0' };
+        }
         try {
           if (payload?.pixels && Array.isArray(payload.pixels)) {
             globalFramebufferEngine.drawPixelBuffer(payload.pixels);
@@ -142,17 +161,14 @@ export class WaylandCompositorDaemon {
   }
 
   private pruneExitedClients(): void {
-    let removedAny = false;
+    const exitedOwners = new Set<number>();
     for (const [id, surface] of this.surfaces) {
       const owner = globalTaskScheduler.getProcess(surface.ownerPid);
       if (!owner || owner.state === 'ZOMBIE') {
-        this.surfaces.delete(id);
-        removedAny = true;
+        exitedOwners.add(surface.ownerPid);
       }
     }
-    if (removedAny && this.surfaces.size === 0) {
-      try { globalFramebufferEngine.closeWindow(); } catch (_) {}
-    }
+    for (const pid of exitedOwners) this.removeClientSurfaces(pid);
   }
 }
 

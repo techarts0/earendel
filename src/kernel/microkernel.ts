@@ -4,7 +4,6 @@ import { globalTaskScheduler } from './taskScheduler';
 import { globalVFSDaemon } from './services/vfsd';
 import { globalPMDaemon } from './services/pmd';
 import { globalDriverDaemon } from './services/driverd';
-import { globalWorkerIPCBridge } from './workerIPCBridge';
 import { globalModuleManager } from './moduleManager';
 import { globalVMPageTable } from './vmPageTable';
 import { globalIPCSharedMem } from './ipcSharedMem';
@@ -48,12 +47,10 @@ export class Microkernel {
     const _capagent = globalCapAgentDaemon;
     const _netd = globalNetworkDaemon;
     const _waylandd = globalWaylandDaemon;
-    const _bridge = globalWorkerIPCBridge;
     const _mod = globalModuleManager;
     const _vm = globalVMPageTable;
     const _shm = globalIPCSharedMem;
 
-    this.log('kernel', 'WebWorker Process Isolation Bridge (WorkerIPCBridge) Online.', 'info');
     this.log('driverd', 'Registering POSIX Character Devices (/dev/null, /dev/zero, /dev/urandom)...', 'info');
     this.log('driverd', 'Registering Pseudo Terminal Slave Devices (/dev/pts/0, /dev/pts/1)...', 'info');
     this.log('kernel', 'Kernel Driver Module Manager (moduleManager) Online.', 'info');
@@ -77,7 +74,7 @@ export class Microkernel {
 
     if (level === 'error' || level === 'panic') {
       try {
-        globalKernelAgentManager.enqueueObservation('dmesg', message, { subsystem, level });
+        globalKernelAgentManager.enqueueObservation('dmesg', message, JSON.stringify({ subsystem, level }));
       } catch (_) {}
     }
   }

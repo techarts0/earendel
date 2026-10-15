@@ -1,5 +1,8 @@
 // Earendel Linux Pure-VFS Image & Remote Sync Engine
-import { globalVFS } from './vfs';
+import { globalVFS, VirtualFileSystem } from './vfs';
+import { globalCapabilityManager } from '../kernel/capability';
+import { globalTaskScheduler } from '../kernel/taskScheduler';
+import { checkNetworkRequest } from './networkAccessPolicy';
 
 export interface VFSImageHeader {
   magic: 'EARENDEL_VFS_V1';
@@ -16,6 +19,20 @@ export interface VFSImagePayload {
 
 class VFSImageEngine {
   private remoteUrl: string = 'https://hub.earendel.techarts.cn';
+
+  private hasAdminProcess(pid: number): boolean {
+    const process = globalTaskScheduler.getProcess(pid);
+    return !!process && process.state === 'RUNNING' && globalCapabilityManager.hasCapability(pid, 'CAP_SYS_ADMIN');
+  }
+
+  private saveConfig(config: Record<string, any>): boolean {
+    const path = '/etc/vfs_config';
+    const content = JSON.stringify(config, null, 2);
+    if (!globalVFS.writeFile(path, content, 'root')) return false;
+    globalVFS.chown(path, 'root:root', false, 'root');
+    globalVFS.chmod(path, '600', false, 'root');
+    return true;
+  }
 
   // Pure JS SHA-256 implementation fallback for non-secure HTTP browser contexts
   private pureJsSha256(str: string): string {
@@ -100,36 +117,51 @@ class VFSImageEngine {
     return this.pureJsSha256(saltedStr);
   }
 
-  public setRemoteUrl(url: string) {
-    this.remoteUrl = url.replace(/\/$/, '');
-    const configStr = globalVFS.readFile('/etc/vfs_config') || '{}';
-    try {
-      const cfg = JSON.parse(configStr);
-      cfg.remoteUrl = this.remoteUrl;
-      globalVFS.writeFile('/etc/vfs_config', JSON.stringify(cfg, null, 2));
-    } catch (e) {
-      globalVFS.writeFile('/etc/vfs_config', JSON.stringify({ remoteUrl: this.remoteUrl }, null, 2));
+  public setRemoteUrl(url: string, callerPid: number): { success: boolean; message: string } {
+    if (!this.hasAdminProcess(callerPid)) return { success: false, message: 'EACCES: CAP_SYS_ADMIN is required to configure VFS remotes.' };
+    let normalizedUrl = url.trim().replace(/\/+$/, '');
+    if (normalizedUrl !== 'local') {
+      try {
+        const parsed = new URL(normalizedUrl);
+        if (!['http:', 'https:'].includes(parsed.protocol) || parsed.username || parsed.password) {
+          return { success: false, message: 'VFS remote URL must be HTTP(S) and cannot embed credentials.' };
+        }
+        normalizedUrl = parsed.origin + parsed.pathname.replace(/\/+$/, '');
+      } catch {
+        return { success: false, message: 'Invalid VFS remote URL.' };
+      }
     }
+    const configStr = globalVFS.readFile('/etc/vfs_config', 'root') || '{}';
+    let cfg: Record<string, any> = {};
+    try {
+      cfg = JSON.parse(configStr);
+    } catch { /* Replace malformed settings with a clean root-owned config. */ }
+    cfg.remoteUrl = normalizedUrl;
+    if (!this.saveConfig(cfg)) return { success: false, message: 'Unable to persist /etc/vfs_config.' };
+    this.remoteUrl = normalizedUrl;
+    return { success: true, message: `Remote VFS Hub endpoint set to '${normalizedUrl}'.` };
   }
 
-  public getRemoteUrl(): string {
-    const configStr = globalVFS.readFile('/etc/vfs_config');
+  public getRemoteUrl(callerPid: number): string | null {
+    if (!this.hasAdminProcess(callerPid)) return null;
+    const configStr = globalVFS.readFile('/etc/vfs_config', 'root');
     if (configStr) {
       try {
         const cfg = JSON.parse(configStr);
         if (cfg.remoteUrl) return cfg.remoteUrl;
-      } catch (e) { }
+      } catch { /* Fall back to the current in-memory setting. */ }
     }
     return this.remoteUrl;
   }
 
-  public async setCredential(passRaw?: string): Promise<{ success: boolean; message: string }> {
+  public async setCredential(passRaw: string | undefined, callerPid: number): Promise<{ success: boolean; message: string }> {
+    if (!this.hasAdminProcess(callerPid)) return { success: false, message: 'EACCES: CAP_SYS_ADMIN is required to set VFS credentials.' };
     const salt = 'EARENDEL_VFS_SECURITY_SALT_2026';
     const pwd = passRaw || 'earendel_default_password';
     const passHash = await this.sha256(`${pwd}:${salt}`);
     const timestamp = Date.now().toString();
 
-    const configStr = globalVFS.readFile('/etc/vfs_config');
+    const configStr = globalVFS.readFile('/etc/vfs_config', 'root');
     let cfg: Record<string, any> = {};
     if (configStr) {
       try {
@@ -146,8 +178,7 @@ class VFSImageEngine {
     cfg.token = token;
     cfg.updatedAt = new Date().toISOString();
 
-    globalVFS.writeFile('/etc/vfs_config', JSON.stringify(cfg, null, 2));
-    globalVFS.chmod('/etc/vfs_config', '600');
+    if (!this.saveConfig(cfg)) return { success: false, message: 'Unable to persist /etc/vfs_config.' };
 
     return {
       success: true,
@@ -155,8 +186,8 @@ class VFSImageEngine {
     };
   }
 
-  public async getCredentialToken(): Promise<{ username: string; token: string }> {
-    const configStr = globalVFS.readFile('/etc/vfs_config');
+  private async getCredentialToken(): Promise<{ username: string; token: string }> {
+    const configStr = globalVFS.readFile('/etc/vfs_config', 'root');
     if (configStr) {
       try {
         const cfg = JSON.parse(configStr);
@@ -170,7 +201,7 @@ class VFSImageEngine {
     return { username: defaultUser, token: defaultToken };
   }
 
-  public exportImage(): { fileName: string; payload: string; count: number } {
+  private exportImage(): { fileName: string; payload: string; count: number } {
     const nodesData: Record<string, any> = {};
     let count = 0;
     let combinedContent = '';
@@ -190,6 +221,7 @@ class VFSImageEngine {
         owner: node.owner,
         group: node.group,
         content: node.content || '',
+        symlinkTarget: node.symlinkTarget,
       };
       combinedContent += pathStr + (node.content || '');
 
@@ -227,11 +259,28 @@ class VFSImageEngine {
     return { fileName, payload: jsonStr, count };
   }
 
-  public importImage(jsonContent: string): { success: boolean; count: number; message: string } {
+  private importImage(jsonContent: string): { success: boolean; count: number; message: string } {
     try {
       const parsed: VFSImagePayload = JSON.parse(jsonContent);
       if (!parsed.header || parsed.header.magic !== 'EARENDEL_VFS_V1') {
         return { success: false, count: 0, message: 'Invalid image format: Missing EARENDEL_VFS_V1 header' };
+      }
+      if (!parsed.nodes || typeof parsed.nodes !== 'object' || Array.isArray(parsed.nodes)) {
+        return { success: false, count: 0, message: 'Invalid image format: Missing node table' };
+      }
+      for (const [pathStr, item] of Object.entries(parsed.nodes)) {
+        if (pathStr === '/') continue;
+        if (!item || typeof item !== 'object' || !['directory', 'file', 'symlink'].includes(item.type)) {
+          return { success: false, count: 0, message: `Invalid image node at '${pathStr}'` };
+        }
+        if (item.type === 'symlink' && (typeof item.symlinkTarget !== 'string' || !item.symlinkTarget || item.symlinkTarget.length > 4096)) {
+          return { success: false, count: 0, message: `Invalid image symbolic link at '${pathStr}'` };
+        }
+        if (item.type === 'file' && (typeof item.content !== 'string' ||
+            item.content.length > VirtualFileSystem.MAX_FILE_BYTES ||
+            new TextEncoder().encode(item.content).byteLength > VirtualFileSystem.MAX_FILE_BYTES)) {
+          return { success: false, count: 0, message: `Image file '${pathStr}' exceeds the ${VirtualFileSystem.MAX_FILE_BYTES}-byte VFS file-size limit` };
+        }
       }
 
       let restoredCount = 0;
@@ -240,12 +289,26 @@ class VFSImageEngine {
         if (pathStr === '/') continue;
 
         if (item.type === 'directory') {
-          globalVFS.mkdir(pathStr, true);
+          if (!globalVFS.mkdir(pathStr, true)) {
+            return { success: false, count: restoredCount, message: `Could not restore image directory '${pathStr}'` };
+          }
         } else if (item.type === 'file') {
-          globalVFS.writeFile(pathStr, item.content);
+          if (!globalVFS.writeFile(pathStr, item.content, 'root')) {
+            return { success: false, count: restoredCount, message: `Could not restore image file '${pathStr}'` };
+          }
+        } else if (item.type === 'symlink') {
+          const existing = globalVFS.getNodeByPath(pathStr, 'root');
+          if (existing && !globalVFS.remove(pathStr, false, 'root')) {
+            return { success: false, count: restoredCount, message: `Could not replace image entry '${pathStr}'` };
+          }
+          if (!globalVFS.symlink(item.symlinkTarget, pathStr)) {
+            return { success: false, count: restoredCount, message: `Could not restore image symbolic link '${pathStr}'` };
+          }
         }
-        globalVFS.chmod(pathStr, item.permissions);
-        globalVFS.chown(pathStr, `${item.owner}:${item.group}`);
+        if (item.type !== 'symlink' && (!globalVFS.chmod(pathStr, item.permissions, false, 'root') ||
+            !globalVFS.chown(pathStr, `${item.owner}:${item.group}`, false, 'root'))) {
+          return { success: false, count: restoredCount, message: `Could not restore image metadata for '${pathStr}'` };
+        }
         restoredCount++;
       }
 
@@ -259,7 +322,7 @@ class VFSImageEngine {
     }
   }
 
-  public triggerPhysicalDownload(fileName: string, payload: string) {
+  private triggerPhysicalDownload(fileName: string, payload: string) {
     const blob = new Blob([payload], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -271,7 +334,7 @@ class VFSImageEngine {
     URL.revokeObjectURL(url);
   }
 
-  public triggerPhysicalFilePicker(): Promise<{ success: boolean; log: string }> {
+  private triggerPhysicalFilePicker(): Promise<{ success: boolean; log: string }> {
     return new Promise((resolve) => {
       const input = document.createElement('input');
       input.type = 'file';
@@ -305,10 +368,16 @@ class VFSImageEngine {
     });
   }
 
-  public async push(): Promise<{ success: boolean; log: string }> {
+  public async push(callerPid: number): Promise<{ success: boolean; log: string }> {
+    if (!this.hasAdminProcess(callerPid)) return { success: false, log: 'EACCES: CAP_SYS_ADMIN is required to export the complete VFS image.' };
+    const remoteUrl = this.getRemoteUrl(callerPid) || 'local';
+    const authorizedUrl = remoteUrl === 'local' ? '' : `${remoteUrl}/api/vfs/push`;
+    if (authorizedUrl) {
+      const denied = checkNetworkRequest(callerPid, authorizedUrl);
+      if (denied) return { success: false, log: denied };
+    }
     const { count, payload } = this.exportImage();
     const { username, token } = await this.getCredentialToken();
-    const remoteUrl = this.getRemoteUrl();
     const remoteImgName = `vfs_${username}.earendel-img`;
 
     // Local Physical Disk Download Mode (Default mode when no remote URL is set or set to local)
@@ -324,10 +393,11 @@ class VFSImageEngine {
     }
 
     // Remote Cloud VFS Image Push
-    const url = `${remoteUrl}/api/vfs/push`;
+    const requestUrl = `${remoteUrl}/api/vfs/push`;
     try {
-      const res = await fetch(url, {
+      const res = await fetch(requestUrl, {
         method: 'POST',
+        redirect: 'error',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${token}`,
@@ -355,9 +425,15 @@ class VFSImageEngine {
     }
   }
 
-  public async pull(): Promise<{ success: boolean; log: string }> {
+  public async pull(callerPid: number): Promise<{ success: boolean; log: string }> {
+    if (!this.hasAdminProcess(callerPid)) return { success: false, log: 'EACCES: CAP_SYS_ADMIN is required to replace VFS image contents.' };
+    const remoteUrl = this.getRemoteUrl(callerPid) || 'local';
+    const url = remoteUrl === 'local' ? '' : `${remoteUrl}/api/vfs/pull`;
+    if (url) {
+      const denied = checkNetworkRequest(callerPid, url);
+      if (denied) return { success: false, log: denied };
+    }
     const { username, token } = await this.getCredentialToken();
-    const remoteUrl = this.getRemoteUrl();
     const remoteImgName = `vfs_${username}.earendel-img`;
 
     // Local Physical Disk File Picker Upload Mode (Default mode)
@@ -366,10 +442,11 @@ class VFSImageEngine {
     }
 
     // Remote Cloud VFS Image Pull
-    const url = `${remoteUrl}/api/vfs/pull?user=${username}&token=${token}`;
+    const requestUrl = `${remoteUrl}/api/vfs/pull?user=${username}&token=${token}`;
 
     try {
-      const res = await fetch(url, {
+      const res = await fetch(requestUrl, {
+        redirect: 'error',
         headers: { Authorization: `Bearer ${token}` },
       });
 

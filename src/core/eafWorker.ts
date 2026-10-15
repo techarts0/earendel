@@ -7,6 +7,9 @@ export interface EafWorkerResult {
 
 type RpcHandler = (method: string, args: unknown[]) => Promise<unknown> | unknown;
 const MAX_RPC_PAYLOAD_BYTES = 4 * 1024 * 1024;
+const MAX_ACTIVE_EAF_WORKERS = 8;
+const MAX_ACTIVE_RPC_CALLS_PER_WORKER = 64;
+let activeEafWorkers = 0;
 
 function estimatePayloadSize(value: unknown, seen = new WeakSet<object>(), depth = 0): number {
   if (value === null || value === undefined || typeof value === 'boolean' || typeof value === 'number') return 16;
@@ -28,6 +31,7 @@ function estimatePayloadSize(value: unknown, seen = new WeakSet<object>(), depth
 }
 
 export const EAF_WORKER_SOURCE = `
+(() => {
   'use strict';
   // EAF must not inherit browser storage, network, device, or nested-worker APIs.
   const forbiddenApis = ['fetch', 'XMLHttpRequest', 'WebSocket', 'WebSocketStream', 'EventSource',
@@ -63,7 +67,10 @@ export const EAF_WORKER_SOURCE = `
       const bounded = args.slice(0, 32).map(value => {
         if (typeof value === 'string') return value.slice(0, 16_384);
         if (value === null || ['number', 'boolean'].includes(typeof value)) return value;
-        try { return JSON.stringify(value).slice(0, 16_384); } catch (_) { return String(value).slice(0, 16_384); }
+        // Never traverse attacker-controlled object graphs while formatting a
+        // log line: JSON.stringify can execute getters and allocate without a
+        // bound before the output is truncated.
+        return typeof value === 'undefined' ? '[undefined]' : '[object omitted]';
       });
       const size = bounded.reduce((sum, value) => sum + String(value).length, 0);
       if (consoleBudget >= 1_000_000) return;
@@ -120,6 +127,11 @@ export const EAF_WORKER_SOURCE = `
           ctx.env.PWD = resolved;
           return true;
         },
+        infer: async (prompt, opts) => {
+          const result = await rpc('eslib.sys.infer', [prompt, opts]);
+          if (result?.code !== 0) throw new Error(result?.error || 'Inference syscall failed');
+          return result.data;
+        },
         uname: () => ({
           sysname: 'Earendel-POSIX',
           nodename: ctx.env.HOSTNAME || 'earendel-microkernel',
@@ -166,6 +178,7 @@ export const EAF_WORKER_SOURCE = `
       sendToHost({ type: 'result', channelToken, error: error?.message || String(error) });
     }
   });
+})();
 `;
 
 export function runEafInWorker(
@@ -179,6 +192,9 @@ export function runEafInWorker(
 ): Promise<EafWorkerResult> {
   if (typeof Worker === 'undefined' || typeof Blob === 'undefined' || typeof URL.createObjectURL !== 'function') {
     return Promise.reject(new Error('Isolated EAF execution requires Web Worker and Blob URL support.'));
+  }
+  if (activeEafWorkers >= MAX_ACTIVE_EAF_WORKERS) {
+    return Promise.reject(new Error(`EAGAIN: EAF Worker limit (${MAX_ACTIVE_EAF_WORKERS}) reached.`));
   }
   if (code.length > 2_000_000 || estimatePayloadSize({ context, process }) > 8 * 1024 * 1024) {
     return Promise.reject(new Error('E2BIG: EAF source or initial context exceeded the Worker payload limit.'));
@@ -200,6 +216,7 @@ export function runEafInWorker(
     URL.revokeObjectURL(blobUrl);
     return Promise.reject(error);
   }
+  activeEafWorkers++;
 
   return new Promise((resolve, reject) => {
     const logs: EafWorkerResult['logs'] = [];
@@ -208,10 +225,13 @@ export function runEafInWorker(
     let responseBytes = 0;
     let logCalls = 0;
     let logChars = 0;
+    let activeRpcCalls = 0;
+    let pendingWorkerResult: EafWorkerResult | null = null;
     let settled = false;
     const finish = (error?: Error, result?: EafWorkerResult) => {
       if (settled) return;
       settled = true;
+      activeEafWorkers = Math.max(0, activeEafWorkers - 1);
       clearTimeout(timeout);
       signal?.removeEventListener('abort', onAbort);
       worker.terminate();
@@ -226,6 +246,7 @@ export function runEafInWorker(
     const timeout = setTimeout(() => finish(new Error(`EAF execution exceeded ${timeoutMs}ms`)), timeoutMs);
 
     worker.onerror = (event) => finish(new Error(event.message || 'EAF Worker crashed'));
+    worker.onmessageerror = () => finish(new Error('EAF Worker message could not be deserialized.'));
     worker.onmessage = async (event: MessageEvent) => {
       const message = event.data;
       if (message?.channelToken !== channelToken) {
@@ -242,7 +263,11 @@ export function runEafInWorker(
         return;
       }
       if (message?.type === 'rpc') {
+        activeRpcCalls++;
         try {
+          if (activeRpcCalls > MAX_ACTIVE_RPC_CALLS_PER_WORKER) {
+            throw new Error(`EAGAIN: EAF Worker RPC concurrency limit (${MAX_ACTIVE_RPC_CALLS_PER_WORKER}) reached.`);
+          }
           if (++rpcCalls > 10_000) {
             finish(new Error('EAF exceeded the 10,000 IPC request limit.'));
             return;
@@ -257,15 +282,20 @@ export function runEafInWorker(
           if (responseSize > MAX_RPC_PAYLOAD_BYTES) throw new Error('E2BIG: EAF IPC response exceeded 4 MB');
           responseBytes += responseSize;
           if (responseBytes > 32 * 1024 * 1024) throw new Error('E2BIG: EAF cumulative IPC responses exceeded 32 MB');
-          worker.postMessage({ type: 'rpc-result', id: message.id, value });
+          if (!settled) worker.postMessage({ type: 'rpc-result', id: message.id, value });
         } catch (error) {
-          worker.postMessage({ type: 'rpc-result', id: message.id, error: error instanceof Error ? error.message : String(error) });
+          if (!settled) worker.postMessage({ type: 'rpc-result', id: message.id, error: error instanceof Error ? error.message : String(error) });
+        } finally {
+          activeRpcCalls--;
+          if (!settled && pendingWorkerResult && activeRpcCalls === 0) finish(undefined, pendingWorkerResult);
         }
         return;
       }
       if (message?.type === 'result') {
-        if (message.error) finish(undefined, { error: String(message.error), logs });
-        else finish(undefined, { value: message.value, env: message.env, logs });
+        pendingWorkerResult = message.error
+          ? { error: String(message.error), logs }
+          : { value: message.value, env: message.env, logs };
+        if (activeRpcCalls === 0) finish(undefined, pendingWorkerResult);
       }
     };
 
@@ -274,12 +304,16 @@ export function runEafInWorker(
       return;
     }
     signal?.addEventListener('abort', onAbort, { once: true });
-    worker.postMessage({
-      type: 'run',
-      channelToken,
-      code,
-      context,
-      process,
-    });
+    try {
+      worker.postMessage({
+        type: 'run',
+        channelToken,
+        code,
+        context,
+        process,
+      });
+    } catch (error) {
+      finish(error instanceof Error ? error : new Error(String(error)));
+    }
   });
 }

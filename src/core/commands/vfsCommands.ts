@@ -12,36 +12,40 @@ export const vfsCommands: Command[] = [
       const arg2 = ctx.args[2];
 
       if (sub === 'push') {
-        return globalVFSImageEngine.push().then((res) => ({
+        const callerPid = ctx.callerPid ?? -1;
+        return globalVFSImageEngine.push(callerPid).then((res) => ({
           stdout: `${res.log}\n`,
-          stderr: '',
-          exitCode: 0,
+          stderr: res.success ? '' : `${res.log}\n`,
+          exitCode: res.success ? 0 : 1,
         }));
       }
 
       if (sub === 'pull') {
-        return globalVFSImageEngine.pull().then((res) => ({
+        const callerPid = ctx.callerPid ?? -1;
+        return globalVFSImageEngine.pull(callerPid).then((res) => ({
           stdout: `${res.log}\n`,
-          stderr: '',
-          exitCode: 0,
+          stderr: res.success ? '' : `${res.log}\n`,
+          exitCode: res.success ? 0 : 1,
         }));
       }
 
       if (sub === 'remote') {
         if (arg1 === 'set-url' && arg2) {
-          globalVFSImageEngine.setRemoteUrl(arg2);
-          return { stdout: `Remote VFS Hub Endpoint set to '${arg2}'\n`, stderr: '', exitCode: 0 };
+          const result = globalVFSImageEngine.setRemoteUrl(arg2, ctx.callerPid ?? -1);
+          return { stdout: result.success ? `${result.message}\n` : '', stderr: result.success ? '' : `${result.message}\n`, exitCode: result.success ? 0 : 1 };
         }
         if (arg1 === 'set-credential') {
           const pass = arg2 || 'default_password';
-          return globalVFSImageEngine.setCredential(pass).then((res) => ({
-            stdout: `${res.message}\n`,
-            stderr: '',
-            exitCode: 0,
+          return globalVFSImageEngine.setCredential(pass, ctx.callerPid ?? -1).then((res) => ({
+            stdout: res.success ? `${res.message}\n` : '',
+            stderr: res.success ? '' : `${res.message}\n`,
+            exitCode: res.success ? 0 : 1,
           }));
         }
+        const remoteUrl = globalVFSImageEngine.getRemoteUrl(ctx.callerPid ?? -1);
+        if (remoteUrl === null) return { stdout: '', stderr: 'EACCES: CAP_SYS_ADMIN is required to inspect VFS remote configuration.\n', exitCode: 1 };
         return {
-          stdout: `Current Remote VFS Hub Endpoint: ${globalVFSImageEngine.getRemoteUrl()}\nUsage:\n  vfs remote set-url <URL | local>\n  vfs remote set-credential [password]\n`,
+          stdout: `Current Remote VFS Hub Endpoint: ${remoteUrl}\nUsage:\n  vfs remote set-url <URL | local>\n  vfs remote set-credential [password]\n`,
           stderr: '',
           exitCode: 0,
         };

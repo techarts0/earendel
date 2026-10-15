@@ -19,12 +19,12 @@ export class KAgentDaemon implements IKernelAgent {
     return obs.source === 'process' || obs.source === 'dmesg';
   }
 
-  public async infer(obs: AgentObservation): Promise<AgentAction> {
+  public async infer(obs: AgentObservation, signal?: AbortSignal): Promise<AgentAction> {
     const payloadStr = JSON.stringify(obs.payload);
 
     // Call SYS_INFER for AI-Native microkernel crash reasoning
     const prompt = `System Crash Event Detected (${obs.event}): ${payloadStr}. Analyze root cause and suggest microkernel repair strategy.`;
-    const inferRes = await syscallAs(5, SyscallNo.SYS_INFER, prompt);
+    const inferRes = await syscallAs(5, SyscallNo.SYS_INFER, prompt, { signal });
     const aiDiagnosis = inferRes.data || 'Process Segfault analyzed: NULL pointer dereference.';
 
     return {

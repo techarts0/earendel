@@ -11,6 +11,7 @@ function parsePermissionGrants(args: string[]): { args: string[]; grant: SkillPe
       ['--grant-write=', grant.vfs_write!],
       ['--grant-tool=', grant.system_tools!],
       ['--grant-mcp=', grant.mcp_tools!],
+      ['--grant-network-host=', grant.network_hosts ??= []],
     ] as const;
     const matched = valueOption.find(([prefix]) => arg.startsWith(prefix));
     if (matched) {
@@ -38,7 +39,7 @@ export const skillCommand: Command = {
     if (ctx.args.length === 0) {
       return {
         stdout: '',
-        stderr: 'Usage: skill [tui|dag] <path/to/skill.md | path/to/skill_dir> [--grant-read=PATH] [--grant-write=PATH] [--grant-tool=NAME] [--grant-mcp=SERVER/TOOL] [--grant-network] [--grant-memory] [--arg=val ...]\n',
+        stderr: 'Usage: skill [tui|dag] <path/to/skill.md | path/to/skill_dir> [--grant-read=PATH] [--grant-write=PATH] [--grant-tool=NAME] [--grant-mcp=SERVER/TOOL] [--grant-network | --grant-network-host=URL] [--grant-memory] [--arg=val ...]\n',
         exitCode: 1,
       };
     }

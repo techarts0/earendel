@@ -91,21 +91,37 @@ export const agentTestCommand: Command = {
       payload: { pid: 42, cmd: eventStr },
     };
 
-    out += `\x1b[33m1. Observe Stage:\x1b[0m Querying interest...\n`;
-    const interested = await agent.observe(obs);
-    out += `   -> Result: ${interested ? '\x1b[32mINTERESTED\x1b[0m' : '\x1b[90mIGNORED\x1b[0m'}\n\n`;
+    const testResult = await globalKernelAgentManager.runAgentTest(agentId, obs, ctx.abortSignal);
+    if (testResult.status === 'busy') {
+      return { stdout: '', stderr: `agent-test: '${agentId}' already has an active run\n`, exitCode: 1 };
+    }
+    if (testResult.status === 'timed-out') {
+      return { stdout: out, stderr: `agent-test: '${agentId}' exceeded the ${globalKernelAgentManager.getAgentResponseDeadlineMs()}ms test deadline\n`, exitCode: 1 };
+    }
+    if (testResult.status === 'aborted') {
+      return { stdout: out, stderr: 'agent-test: test was interrupted\n', exitCode: 130 };
+    }
+    if (testResult.status === 'failed') {
+      return { stdout: out, stderr: `agent-test: ${testResult.error || 'Agent failed'}\n`, exitCode: 1 };
+    }
+    if (testResult.status === 'not-found') {
+      return { stdout: '', stderr: `agent-test: error: agent '${agentId}' not found\n`, exitCode: 1 };
+    }
 
-    if (!interested) {
+    out += `\x1b[33m1. Observe Stage:\x1b[0m Querying interest...\n`;
+    out += `   -> Result: ${testResult.interested ? '\x1b[32mINTERESTED\x1b[0m' : '\x1b[90mIGNORED\x1b[0m'}\n\n`;
+
+    if (!testResult.interested) {
       return { stdout: out + `Agent ignored event. Test finished.\n`, stderr: '', exitCode: 0 };
     }
 
     out += `\x1b[33m2. Infer Stage:\x1b[0m Calling SYS_INFER reasoning engine...\n`;
-    const action = await agent.infer(obs);
+    const action = testResult.action;
     out += `   -> Action Type: \x1b[1;35m${action.actionType}\x1b[0m\n`;
     out += `   -> Reason:      ${action.reason}\n\n`;
 
     out += `\x1b[33m3. Act Stage:\x1b[0m Executing microkernel action...\n`;
-    const actRes = await agent.act(action);
+    const actRes = testResult.acted;
     out += `   -> Execution:   ${actRes ? '\x1b[32mSUCCESS (ALLOWED/HANDLED)\x1b[0m' : '\x1b[31mINTERCEPTED (BLOCKED)\x1b[0m'}\n`;
 
     return { stdout: out + `\n\x1b[32mObserve-Infer-Act Pipeline Test Completed.\x1b[0m\n`, stderr: '', exitCode: 0 };

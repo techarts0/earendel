@@ -1,5 +1,6 @@
 import { ProcessInfo } from './types';
 import { globalTaskScheduler } from '../kernel/taskScheduler';
+import { globalCapabilityManager } from '../kernel/capability';
 
 export interface JobInfo {
   jobId: number;
@@ -42,6 +43,7 @@ export class ProcessManager {
   }
 
   public createProcess(info: Omit<ProcessInfo, 'pid' | 'startTime'>): ProcessInfo {
+    if (!globalTaskScheduler.canCreateProcess()) throw new Error('EAGAIN: process table is full');
     const pid = this.nextPid++;
     const startTime = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     const proc: ProcessInfo = {
@@ -94,6 +96,7 @@ export class ProcessManager {
     globalTaskScheduler.createProcess({
       pid: proc.pid,
       ppid,
+      processGroupId: globalTaskScheduler.getProcess(ppid)?.processGroupId,
       name: command.startsWith('bash ') ? command : `[bg] ${command}`,
       user: 'hello',
       state: 'RUNNING',
@@ -108,6 +111,7 @@ export class ProcessManager {
         [2, { fd: 2, path: '/dev/stderr', offset: 0, flags: 'w' }],
       ]),
     });
+    globalCapabilityManager.copyCapabilities(ppid, proc.pid);
 
     const jobId = this.nextJobId++;
     const job: JobInfo = {

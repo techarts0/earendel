@@ -14,7 +14,9 @@ async function runNestedBash(ctx: any, content: string, args: string[]): Promise
   let result: any = { stdout: '', stderr: '', exitCode: 1 };
   try {
     const { ShellEngine } = await import('../shellEngine');
-    const childVfs = createCapabilityVfsView(ctx.vfs, childPid, ctx.env.USER || 'hello');
+    const childVfs = createCapabilityVfsView(ctx.vfs, childPid, ctx.env.USER || 'hello', {
+      abortSignal: ctx.abortSignal,
+    });
     const childShell = new ShellEngine(childVfs, ctx.processManager);
     childShell.callerPid = childPid;
     childShell.lang = ctx.lang;

@@ -299,7 +299,7 @@ export const fileCommands: Command[] = [
     category: 'file',
     execute: async (ctx) => {
       const { flags, positional } = parseFlags(ctx.args);
-      const noCreate = flags.has('c') || flags.has('h') || flags.has('no-create');
+      const noCreate = flags.has('c') || flags.has('no-create');
 
       // Reference file parsing: -r <ref_file>
       let refFile: string | null = null;
@@ -327,20 +327,15 @@ export const fileCommands: Command[] = [
       }
 
       const user = ctx.env['USER'] || 'hello';
+      let stderr = '';
+      let exitCode = 0;
       for (const filename of fileTargets) {
-        const existing = ctx.vfs.readFile(filename, user);
-        if (existing === null) {
-          if (!noCreate) {
-            await syscallForContext(ctx, SyscallNo.SYS_WRITE, filename, '');
-            const node = ctx.vfs.getNodeByPath(filename);
-            if (node) node.updatedAt = timestamp;
-          }
-        } else {
-          const node = ctx.vfs.getNodeByPath(filename);
-          if (node) node.updatedAt = timestamp;
+        if (!ctx.vfs.touch(filename, user, timestamp, noCreate)) {
+          stderr += `touch: cannot touch '${filename}': Permission denied or invalid path\n`;
+          exitCode = 1;
         }
       }
-      return { stdout: '', stderr: '', exitCode: 0 };
+      return { stdout: '', stderr, exitCode };
     },
   },
   {
@@ -755,7 +750,7 @@ export const fileCommands: Command[] = [
     name: 'rm',
     description: 'Remove files or directories',
     category: 'file',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       const { flags, positional } = parseFlags(ctx.args);
       const recursive = flags.has('r') || flags.has('R') || flags.has('recursive');
       const force = flags.has('f') || flags.has('force');
@@ -802,7 +797,7 @@ export const fileCommands: Command[] = [
 
         const isDir = node.type === 'directory';
         const currentUser = ctx.env.USER || 'hello';
-        const ok = ctx.vfs.remove(target, recursive || removeDir, currentUser);
+        const ok = await ctx.vfs.removeAsync(target, recursive || removeDir, currentUser);
         if (!ok) {
           if (!force) {
             stderr += `rm: cannot remove '${target}': No such file or directory, permission denied, or protected system directory\n`;
@@ -841,10 +836,14 @@ export const fileCommands: Command[] = [
       const copySingle = (srcPath: string, targetPath: string): boolean => {
         const srcNode = ctx.vfs.getNodeByPath(srcPath);
         if (!srcNode) return false;
+        const sourceResolved = ctx.vfs.resolvePath(srcPath);
+        const targetResolved = ctx.vfs.resolvePath(targetPath);
+        if (!sourceResolved || !targetResolved || sourceResolved === targetResolved ||
+            (srcNode.type === 'directory' && targetResolved.startsWith(`${sourceResolved}/`))) return false;
 
         if (srcNode.type === 'directory') {
           if (!recursive) return false;
-          ctx.vfs.mkdir(targetPath, true);
+          if (!ctx.vfs.mkdir(targetPath, true)) return false;
           const createdDir = ctx.vfs.getNodeByPath(targetPath);
           if (createdDir && preserve) {
             createdDir.permissions = srcNode.permissions;
@@ -852,17 +851,17 @@ export const fileCommands: Command[] = [
             createdDir.group = srcNode.group;
             createdDir.updatedAt = srcNode.updatedAt;
           }
+          let allChildrenCopied = true;
           if (srcNode.children) {
             for (const child of srcNode.children.values()) {
-              copySingle(`${srcPath}/${child.name}`, `${targetPath}/${child.name}`);
+              if (!copySingle(`${srcPath}/${child.name}`, `${targetPath}/${child.name}`)) allChildrenCopied = false;
             }
           }
-          return true;
+          return allChildrenCopied;
         } else if (srcNode.type === 'symlink') {
-          ctx.vfs.symlink(srcNode.symlinkTarget || '', targetPath);
-          return true;
+          return ctx.vfs.symlink(srcNode.symlinkTarget || '', targetPath);
         } else {
-          ctx.vfs.writeFile(targetPath, srcNode.content ?? '');
+          if (!ctx.vfs.writeFile(targetPath, srcNode.content ?? '')) return false;
           const copiedNode = ctx.vfs.getNodeByPath(targetPath);
           if (copiedNode && preserve) {
             copiedNode.permissions = srcNode.permissions;
@@ -914,7 +913,7 @@ export const fileCommands: Command[] = [
     name: 'mv',
     description: 'Move (rename) files and directories',
     category: 'file',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       const { flags, positional } = parseFlags(ctx.args);
       const verbose = flags.has('v') || flags.has('verbose');
       const noClobber = flags.has('n') || flags.has('no-clobber');
@@ -934,9 +933,13 @@ export const fileCommands: Command[] = [
       const copySingle = (srcPath: string, targetPath: string): boolean => {
         const node = ctx.vfs.getNodeByPath(srcPath);
         if (!node) return false;
+        const sourceResolved = ctx.vfs.resolvePath(srcPath);
+        const targetResolved = ctx.vfs.resolvePath(targetPath);
+        if (!sourceResolved || !targetResolved ||
+            (node.type === 'directory' && targetResolved.startsWith(`${sourceResolved}/`))) return false;
 
         if (node.type === 'directory') {
-          ctx.vfs.mkdir(targetPath, true);
+          if (!ctx.vfs.mkdir(targetPath, true)) return false;
           const dirNode = ctx.vfs.getNodeByPath(targetPath);
           if (dirNode) {
             dirNode.permissions = node.permissions;
@@ -944,17 +947,17 @@ export const fileCommands: Command[] = [
             dirNode.group = node.group;
             dirNode.updatedAt = node.updatedAt;
           }
+          let allChildrenCopied = true;
           if (node.children) {
             for (const child of node.children.values()) {
-              copySingle(`${srcPath}/${child.name}`, `${targetPath}/${child.name}`);
+              if (!copySingle(`${srcPath}/${child.name}`, `${targetPath}/${child.name}`)) allChildrenCopied = false;
             }
           }
-          return true;
+          return allChildrenCopied;
         } else if (node.type === 'symlink') {
-          ctx.vfs.symlink(node.symlinkTarget || '', targetPath);
-          return true;
+          return ctx.vfs.symlink(node.symlinkTarget || '', targetPath);
         } else {
-          ctx.vfs.writeFile(targetPath, node.content ?? '');
+          if (!ctx.vfs.writeFile(targetPath, node.content ?? '')) return false;
           const fileNode = ctx.vfs.getNodeByPath(targetPath);
           if (fileNode) {
             fileNode.permissions = node.permissions;
@@ -984,13 +987,31 @@ export const fileCommands: Command[] = [
           targetDest = dest.endsWith('/') ? `${dest}${baseName}` : `${dest}/${baseName}`;
         }
 
+        const sourceResolved = ctx.vfs.resolvePath(src);
+        const targetResolved = ctx.vfs.resolvePath(targetDest);
+        if (sourceResolved && sourceResolved === targetResolved) continue;
+        if (srcNode.type === 'directory' && sourceResolved && targetResolved &&
+            targetResolved.startsWith(`${sourceResolved}/`)) {
+          stderr += `mv: cannot move '${src}' into a subdirectory of itself, '${targetDest}'\n`;
+          exitCode = 1;
+          continue;
+        }
+
         const existingTarget = ctx.vfs.getNodeByPath(targetDest);
         if (existingTarget && noClobber) {
           continue;
         }
 
-        copySingle(src, targetDest);
-        ctx.vfs.remove(src, true);
+        if (!copySingle(src, targetDest)) {
+          stderr += `mv: failed to move '${src}' to '${targetDest}': copy failed or permission denied\n`;
+          exitCode = 1;
+          continue;
+        }
+        if (!await ctx.vfs.removeAsync(src, true, ctx.env.USER || 'hello')) {
+          stderr += `mv: copied '${src}' to '${targetDest}' but could not remove the source\n`;
+          exitCode = 1;
+          continue;
+        }
 
         if (verbose) {
           stdout += `renamed '${src}' -> '${targetDest}'\n`;
@@ -1027,26 +1048,32 @@ export const fileCommands: Command[] = [
   },
   {
     name: 'ln',
-    description: 'Make links between files (-s for symbolic link)',
+    description: 'Create symbolic links (-s, -f); hard links are not supported',
     category: 'file',
-    execute: (ctx) => {
-      const isSymlink = ctx.args.includes('-s') || ctx.args.includes('-sf');
-      const nonFlags = ctx.args.filter((a) => !a.startsWith('-'));
+    execute: async (ctx) => {
+      const { flags, positional: nonFlags } = parseFlags(ctx.args);
+      const isSymlink = flags.has('s') || flags.has('symbolic');
+      const force = flags.has('f') || flags.has('force');
 
       if (nonFlags.length < 2) {
-        return { stdout: '', stderr: 'ln: missing file operand\nUsage: ln [-s] TARGET LINK_NAME\n', exitCode: 1 };
+        return { stdout: '', stderr: 'ln: missing file operand\nUsage: ln [-s] [-f] TARGET LINK_NAME\n', exitCode: 1 };
       }
 
       const target = nonFlags[0];
       const linkName = nonFlags[1];
 
       if (isSymlink) {
+        if (force && ctx.vfs.getNodeByPath(linkName) && !await ctx.vfs.removeAsync(linkName, false, ctx.env.USER || 'hello')) {
+          return { stdout: '', stderr: `ln: cannot remove '${linkName}': Permission denied\n`, exitCode: 1 };
+        }
         const ok = ctx.vfs.symlink(target, linkName);
         if (!ok) return { stdout: '', stderr: `ln: failed to create symbolic link '${linkName}'\n`, exitCode: 1 };
       } else {
-        const content = ctx.vfs.readFile(target);
-        if (content === null) return { stdout: '', stderr: `ln: failed to access '${target}': No such file or directory\n`, exitCode: 1 };
-        ctx.vfs.writeFile(linkName, content);
+        return {
+          stdout: '',
+          stderr: 'ln: hard links are not supported by the Earendel VFS\n',
+          exitCode: 1,
+        };
       }
 
       return { stdout: '', stderr: '', exitCode: 0 };
@@ -1146,7 +1173,7 @@ Change: ${dateStr} +0800
     name: 'rmdir',
     description: 'Remove empty directories',
     category: 'file',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       if (ctx.args.length === 0) return { stdout: '', stderr: 'rmdir: missing operand\n', exitCode: 1 };
       const dirName = ctx.args[0];
       const node = ctx.vfs.getNodeByPath(dirName);
@@ -1156,7 +1183,7 @@ Change: ${dateStr} +0800
       if (node.children && node.children.size > 0) return { stdout: '', stderr: `rmdir: failed to remove '${dirName}': Directory not empty\n`, exitCode: 1 };
 
       const currentUser = ctx.env.USER || 'hello';
-      const ok = ctx.vfs.remove(dirName, false, currentUser);
+      const ok = await ctx.vfs.removeAsync(dirName, false, currentUser);
       if (!ok) {
         return { stdout: '', stderr: `rmdir: failed to remove '${dirName}': Permission denied or protected system directory\n`, exitCode: 1 };
       }

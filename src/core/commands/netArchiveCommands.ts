@@ -186,7 +186,10 @@ export const netArchiveCommands: Command[] = [
       }
 
       if (outFile) {
-        await ctx.syscall(SyscallNo.SYS_WRITE, outFile, bodyText);
+        const writeResult = await ctx.syscall(SyscallNo.SYS_WRITE, outFile, bodyText);
+        if (writeResult.code !== 0) {
+          return { stdout: '', stderr: `curl: cannot write '${outFile}': ${writeResult.error || 'write failed'}\n`, exitCode: 23 };
+        }
         const feedback = silent ? '' : `\x1b[32m[curl]\x1b[0m Transferred ${bodyText.length} bytes -> Saved to \x1b[1;36m${outFile}\x1b[0m\n`;
         return { stdout: feedback, stderr: '', exitCode: 0 };
       }
@@ -250,7 +253,10 @@ export const netArchiveCommands: Command[] = [
       bodyText = response.body || '';
 
       // POSIX System Call SYS_WRITE -> vfsd IPC
-      await ctx.syscall(SyscallNo.SYS_WRITE, fileName, bodyText);
+      const writeResult = await ctx.syscall(SyscallNo.SYS_WRITE, fileName, bodyText);
+      if (writeResult.code !== 0) {
+        return { stdout: '', stderr: `wget: cannot write '${fileName}': ${writeResult.error || 'write failed'}\n`, exitCode: 3 };
+      }
 
       const sizeBytes = bodyText.length;
       const sizeKB = (sizeBytes / 1024).toFixed(1);

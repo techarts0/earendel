@@ -41,7 +41,9 @@ export class JsRuntimeEngine {
       }
       return syscallAs(childPid, sysNo, ...args);
     };
-    const childVfs = createCapabilityVfsView(ctx.vfs, childPid, ctx.env.USER || 'hello');
+    const childVfs = createCapabilityVfsView(ctx.vfs, childPid, ctx.env.USER || 'hello', {
+      abortSignal: executionAbortController.signal,
+    });
 
     let stdoutBuffer = '';
     let stderrBuffer = '';
@@ -97,6 +99,7 @@ export class JsRuntimeEngine {
           getpid: () => childSyscall(SyscallNo.SYS_GETPID),
           infer: async (prompt: string, opts?: any) => {
             const res = await childSyscall(SyscallNo.SYS_INFER, prompt, opts);
+            if (res.code !== 0) throw new Error(res.error || 'Inference syscall failed');
             return res.data;
           },
           getenv: (key: string) => ctx.env[key] ?? null,
@@ -216,9 +219,9 @@ export class JsRuntimeEngine {
               description: agentObj.description || 'User-defined application agent',
               isDaemon: Boolean(agentObj.isDaemon),
               enabled: agentObj.enabled ?? true,
-              observe: async (obs: any) => (agentObj.observe ? agentObj.observe(obs) : true),
-              infer: async (obs: any) => (agentObj.infer ? agentObj.infer(obs) : { actionType: 'LOG', reason: 'User agent infer pass' }),
-              act: async (act: any) => (agentObj.act ? agentObj.act(act) : true),
+              observe: async (obs: any, signal?: AbortSignal) => (agentObj.observe ? agentObj.observe(obs, signal) : true),
+              infer: async (obs: any, signal?: AbortSignal) => (agentObj.infer ? agentObj.infer(obs, signal) : { actionType: 'LOG', reason: 'User agent infer pass' }),
+              act: async (act: any, signal?: AbortSignal) => (agentObj.act ? agentObj.act(act, signal) : true),
             };
             globalKernelAgentManager.registerAgent(agent);
             return agent.id;

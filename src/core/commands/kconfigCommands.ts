@@ -21,7 +21,7 @@ export const kconfigCommands: Command[] = [
 
       if (!sub || sub === 'list') {
         const curr = globalTaskScheduler.getPolicy();
-        let out = `Available Microkernel Scheduling Policies:\n`;
+        let out = `Available logical scheduling policy labels (browser tasks are not preemptively scheduled):\n`;
         out += `  FIFO      - First In, First Out ${curr === 'FIFO' ? '\x1b[32m[ACTIVE]\x1b[0m' : ''}\n`;
         out += `  RR        - Round Robin (Time Quantum 50ms) ${curr === 'RR' ? '\x1b[32m[ACTIVE]\x1b[0m' : ''}\n`;
         out += `  CFS       - Completely Fair Scheduler (Linux Default) ${curr === 'CFS' ? '\x1b[32m[ACTIVE]\x1b[0m' : ''}\n`;
@@ -36,7 +36,7 @@ export const kconfigCommands: Command[] = [
           return { stdout: '', stderr: `sched-policy: invalid policy '${ctx.args[1]}'\nChoose from: FIFO, RR, CFS, PRIORITY\n`, exitCode: 1 };
         }
         globalTaskScheduler.setPolicy(targetPolicy);
-        return { stdout: `Microkernel Process Scheduler policy switched to \x1b[1;32m${targetPolicy}\x1b[0m.\n`, stderr: '', exitCode: 0 };
+        return { stdout: `Logical scheduler policy set to \x1b[1;32m${targetPolicy}\x1b[0m. This does not change browser task execution.\n`, stderr: '', exitCode: 0 };
       }
 
       return { stdout: 'Usage: sched-policy [list|set <policy>]\n', stderr: '', exitCode: 0 };
@@ -48,11 +48,15 @@ export const kconfigCommands: Command[] = [
     category: 'sys',
     execute: () => {
       const stats = globalTaskScheduler.getSchedStats();
-      let out = `Earendel Task Scheduler Runtime Statistics (Policy: ${globalTaskScheduler.getPolicy()}):\n\n`;
-      out += `  PID POLICY   PRIO   CPU-TIME   WAIT-TIME   SWITCHES   PROCESS NAME\n`;
+      let out = `Earendel Simulated Task Scheduler State (Policy label: ${globalTaskScheduler.getPolicy()}):\n`;
+      out += `CPU time, wait time, and kernel priority are unavailable in this cooperative browser simulation.\n\n`;
+      out += `  PID POLICY   PRIO   CPU-TIME   WAIT-TIME   STATE-CHANGES   PROCESS NAME\n`;
       out += `--------------------------------------------------------------------------\n`;
       for (const s of stats) {
-        out += `${s.pid.toString().padStart(5, ' ')} ${s.policy.padEnd(8, ' ')} ${s.prio.toString().padStart(4, ' ')}  ${s.cpuTimeSec.toFixed(2).padStart(6, ' ')}s     0.02s ${s.switches.toString().padStart(8, ' ')}   ${s.name}\n`;
+        const prio = s.prio === null ? 'N/A' : String(s.prio);
+        const cpuTime = s.cpuTimeSec === null ? 'N/A' : `${s.cpuTimeSec.toFixed(2)}s`;
+        const waitTime = s.waitTimeSec === null ? 'N/A' : `${s.waitTimeSec.toFixed(2)}s`;
+        out += `${s.pid.toString().padStart(5, ' ')} ${s.policy.padEnd(8, ' ')} ${prio.padStart(4, ' ')}  ${cpuTime.padStart(6, ' ')}  ${waitTime.padStart(8, ' ')} ${s.stateTransitions.toString().padStart(13, ' ')}   ${s.name}\n`;
       }
       return { stdout: out, stderr: '', exitCode: 0 };
     },

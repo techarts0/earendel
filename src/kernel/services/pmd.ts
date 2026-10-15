@@ -6,6 +6,8 @@ import { globalCapabilityManager } from '../capability';
 import { globalVMPageTable } from '../vmPageTable';
 
 export class PMDaemon {
+  private static readonly MAX_PROCESS_NAME_CHARS = 128;
+  private static readonly MAX_WORKING_DIRECTORY_CHARS = 4096;
   private pmdPid = 3;
   private nextPid = 200;
 
@@ -28,6 +30,15 @@ export class PMDaemon {
       case 'SYS_FORK': {
         const parent = globalTaskScheduler.getProcess(msg.senderPid);
         if (!parent) return { error: 'ESRCH: Caller process does not exist' };
+        const processName = payload?.name ?? 'subshell';
+        const cwd = payload?.cwd ?? parent.cwd;
+        if (typeof processName !== 'string' || !processName.trim() || processName.length > PMDaemon.MAX_PROCESS_NAME_CHARS || processName.includes('\0')) {
+          return { error: `EINVAL: process name must be 1-${PMDaemon.MAX_PROCESS_NAME_CHARS} characters without NUL` };
+        }
+        if (typeof cwd !== 'string' || !cwd.startsWith('/') || cwd.length > PMDaemon.MAX_WORKING_DIRECTORY_CHARS || cwd.includes('\0')) {
+          return { error: `EINVAL: working directory must be an absolute path of at most ${PMDaemon.MAX_WORKING_DIRECTORY_CHARS} characters` };
+        }
+        if (!globalTaskScheduler.canCreateProcess()) return { error: 'EAGAIN: process table is full' };
         while (globalTaskScheduler.getProcess(this.nextPid)) {
           this.nextPid++;
         }
@@ -35,14 +46,15 @@ export class PMDaemon {
         const pcb = globalTaskScheduler.createProcess({
           pid: newPid,
           ppid: msg.senderPid,
-          name: payload.name || 'subshell',
+          processGroupId: parent.processGroupId,
+          name: processName,
           user: parent.user,
           state: 'RUNNING',
           startTime: new Date(),
           vszKB: 32000,
           rssKB: 8000,
           cpuUsagePercent: 0.2,
-          cwd: payload.cwd || '/home/hello',
+          cwd,
           // Fork duplicates the descriptor table while retaining references to
           // the same open-file descriptions (including their shared offsets).
           fds: new Map(parent.fds || [
@@ -75,6 +87,7 @@ export class PMDaemon {
         const sig = payload.sig === undefined ? 15 : payload.sig;
         if (!Number.isSafeInteger(targetPid)) return { success: false, error: 'EINVAL: Invalid PID' };
         const supportedSignals = new Set<number>([
+          0, // POSIX existence/permission probe; never delivered to the target.
           Signal.SIGHUP, Signal.SIGINT, Signal.SIGQUIT, Signal.SIGKILL,
           Signal.SIGUSR1, Signal.SIGUSR2, Signal.SIGTERM, Signal.SIGCONT, Signal.SIGSTOP,
         ]);
@@ -88,6 +101,8 @@ export class PMDaemon {
         if (!hasTargetCapability && !globalTaskScheduler.isProcessInCallerTree(msg.senderPid, targetPid)) {
           return { success: false, error: `EPERM: PID ${msg.senderPid} cannot signal PID ${targetPid}` };
         }
+
+        if (sig === 0) return { success: true, pid: targetPid, sig };
 
         if (sig === 9 || sig === 15) {
           if (!globalTaskScheduler.exitProcess(targetPid, 128 + sig)) {

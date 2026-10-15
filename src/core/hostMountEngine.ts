@@ -94,18 +94,47 @@ export class HostMountEngine {
   /**
    * Writes file content to real host PC file
    */
-  public async writeFile(vfsPath: string, content: string): Promise<boolean> {
+  public async writeFile(vfsPath: string, content: string, mayCommit: () => boolean = () => true): Promise<boolean> {
     const match = this.getMatchingMount(vfsPath);
-    if (!match) return false;
+    if (!match || !mayCommit()) return false;
 
+    let writable: any = null;
+    let closed = false;
+    const createdEntries: Array<{ parent: any; name: string }> = [];
+    const rollbackCreatedEntries = async () => {
+      for (const entry of createdEntries.reverse()) {
+        try { await entry.parent.removeEntry(entry.name); } catch { /* Keep non-empty directories and concurrent user data. */ }
+      }
+    };
+    const canCommit = () => this.getMatchingMount(vfsPath)?.mount === match.mount && mayCommit();
     try {
-      const fileHandle = await this.getFileHandle(match.mount.handle, match.relativePath, true);
-      if (!fileHandle) return false;
-      const writable = await fileHandle.createWritable();
+      const fileHandle = await this.getFileHandleForWrite(match.mount.handle, match.relativePath, canCommit, createdEntries);
+      if (!fileHandle || !canCommit()) {
+        await rollbackCreatedEntries();
+        return false;
+      }
+      writable = await fileHandle.createWritable();
+      if (!canCommit()) {
+        await writable.abort?.();
+        await rollbackCreatedEntries();
+        return false;
+      }
       await writable.write(content);
+      // FileSystemWritableFileStream commits on close. Recheck authority after
+      // the asynchronous write and abort the temporary file if it was revoked.
+      if (!canCommit()) {
+        await writable.abort?.();
+        await rollbackCreatedEntries();
+        return false;
+      }
       await writable.close();
+      closed = true;
       return true;
     } catch (e) {
+      if (writable && !closed) {
+        try { await writable.abort?.(); } catch { /* best-effort cleanup */ }
+      }
+      await rollbackCreatedEntries();
       return false;
     }
   }
@@ -128,9 +157,9 @@ export class HostMountEngine {
   /**
    * Removes an entry on real host PC hard drive
    */
-  public async removeEntry(vfsPath: string): Promise<boolean> {
+  public async removeEntry(vfsPath: string, recursive = false, mayCommit: () => boolean = () => true): Promise<boolean> {
     const match = this.getMatchingMount(vfsPath);
-    if (!match || !match.relativePath) return false;
+    if (!match || !match.relativePath || !mayCommit()) return false;
 
     try {
       const parts = match.relativePath.split('/').filter(Boolean);
@@ -141,8 +170,8 @@ export class HostMountEngine {
       if (parentRelPath) {
         parentDirHandle = await this.getDirHandle(match.mount.handle, parentRelPath, false);
       }
-      if (parentDirHandle && parentDirHandle.removeEntry) {
-        await parentDirHandle.removeEntry(nameToRemove, { recursive: true });
+      if (parentDirHandle && parentDirHandle.removeEntry && mayCommit()) {
+        await parentDirHandle.removeEntry(nameToRemove, { recursive });
         return true;
       }
       return false;
@@ -213,6 +242,40 @@ export class HostMountEngine {
       curr = await curr.getDirectoryHandle(parts[i], { create });
     }
     return await curr.getFileHandle(parts[parts.length - 1], { create });
+  }
+
+  /** Resolve or create each path component while rechecking authority around every asynchronous boundary. */
+  private async getFileHandleForWrite(
+    dirHandle: any,
+    relativePath: string,
+    mayCommit: () => boolean,
+    createdEntries: Array<{ parent: any; name: string }>,
+  ): Promise<any | null> {
+    const parts = relativePath.split('/').filter(Boolean);
+    if (parts.length === 0 || !mayCommit()) return null;
+    let current = dirHandle;
+    for (const name of parts.slice(0, -1)) {
+      let child: any;
+      try {
+        child = await current.getDirectoryHandle(name, { create: false });
+      } catch (error: any) {
+        if (error?.name !== 'NotFoundError' || !mayCommit()) return null;
+        child = await current.getDirectoryHandle(name, { create: true });
+        createdEntries.push({ parent: current, name });
+      }
+      if (!mayCommit()) return null;
+      current = child;
+    }
+
+    try {
+      const existing = await current.getFileHandle(parts[parts.length - 1], { create: false });
+      return mayCommit() ? existing : null;
+    } catch (error: any) {
+      if (error?.name !== 'NotFoundError' || !mayCommit()) return null;
+      const created = await current.getFileHandle(parts[parts.length - 1], { create: true });
+      createdEntries.push({ parent: current, name: parts[parts.length - 1] });
+      return mayCommit() ? created : null;
+    }
   }
 
   private async getDirHandle(dirHandle: any, relativePath: string, create: boolean): Promise<any | null> {

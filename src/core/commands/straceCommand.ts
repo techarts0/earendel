@@ -16,7 +16,9 @@ export const straceCommand: Command = {
       traceLogs.push(`${entry.name}(${entry.argsStr}) = ${entry.retvalStr}`);
     };
 
-    setSyscallTracer(tracerHook);
+    const tracerPid = ctx.callerPid;
+    if (!tracerPid) return { stdout: '', stderr: 'strace: caller process identity is required\n', exitCode: 1 };
+    setSyscallTracer(tracerPid, tracerHook);
 
     let res = { stdout: '', stderr: '', exitCode: 0 };
     try {
@@ -35,7 +37,7 @@ export const straceCommand: Command = {
         await ctx.syscall(SyscallNo.SYS_WRITE, 1, res.stdout);
       }
     } finally {
-      setSyscallTracer(null);
+      setSyscallTracer(tracerPid, null);
     }
 
     let output = '';

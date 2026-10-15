@@ -114,7 +114,7 @@ export const FileBrowser: React.FC<FileBrowserProps> = ({ onOpenFile }) => {
               onClick={(e) => {
                 e.stopPropagation();
                 if (currentPath !== '/') {
-                  globalVFS.remove(currentPath, true);
+                  void globalVFS.removeAsync(currentPath, true, 'hello');
                 }
               }}
               className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-rose-400 p-0.5 transition-all"
