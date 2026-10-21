@@ -1,454 +1,325 @@
 ## 实验六：Shell 自动化编程与 ECC 编译工具链
 
 - **适用课程**：Linux 操作系统
-- **推荐学时**：3 学时（讲授 1 学时，练习与实战 2 学时）
+- **推荐学时**：3 学时（讲授 1 学时，练习 2 学时）
 - **实验平台**：Earendel Web OS [https://earendel.techarts.cn]
 
 ---
 
 ### 实验目标
 
-1. **掌握 Shell 核心编程技能**：熟练掌握 Shell 变量、参数引用、控制结构（`if`/`for`/`while`）、函数与数组，能够编写结构清晰的自动化脚本。
-2. **掌握退出状态码与数据管道流**：深入理解 `$?` 状态码在流程控制中的核心作用，熟练结合管道与文本工具（`grep`、`cut`、`sort`、`wc`、`tee`）处理输出数据。
-3. **理解可执行文件结构与编译工具链**：掌握 ECC 编译器的核心参数（`-o`、`-O2`、`-s`），理解 EAF 文件组织结构及其与 Linux ELF 的设计思想映射。
-4. **构建自动化发布流水线（CI/CD）**：编写工程化 Shell 构建脚本，实现源码校验、编译打包、状态拦截、测试验收与报告生成的自动化闭环。
+1. **掌握 Shell 脚本核心语法**：熟练掌握变量定义、引用规则、流程控制结构（`if`/`for`/`while`）与函数封装，编写结构严谨的自动化运维脚本。
+2. **掌握退出状态码与流程控制机制**：深入理解退出状态码（`$?`）在命令执行与逻辑判断中的核心作用，掌握脚本级条件拦截与错误处理。
+3. **理解编译工具链与可执行文件结构**：掌握 ECC 编译器的核心参数（`-o`、`-O2`、`-s`），理解 EAF（Earendel Application Format）分段组织结构及其与 Linux ELF 的设计映射关系。
+4. **构建自动化发布流水线（CI/CD）**：综合运用 Shell 流程控制与 ECC 工具链，实现源码检查、自动编译、状态校验、冒烟测试与构建报告生成的全流程自动化。
 
 ---
 
-### Part A：核心知识点解析与动手实验
+### Part A：核心知识点解析与基础练习
 
-#### 1. Shell 编程核心语法精讲
-
-在终端中创建并进入本实验专属目录：
+在终端中创建并进入本实验工作目录：
 ```bash
 mkdir -p ~/lab6 && cd ~/lab6
 ```
 
-##### (1) 变量、引用与输出重定向
-*   **变量定义与引用**：变量名与等号之间**不能有空格**。引用变量使用 `$VAR` 或 `${VAR}`。
-*   **单引号与双引号的区别**：
-    *   **双引号 `""`**：允许变量解析和命令替换（弱引用）。
-    *   **单引号 `''`**：保留所有字符的字面值，不解析变量（强引用）。
-*   **重定向**：`>` 覆盖写入，`>>` 追加写入。
-
-**动手练习（创建 `01_basics.sh`）**：
-```bash
-#!/bin/bash
-APP="Earendel_App"
-VER="1.0.0"
-
-# 1. 观察引号差异
-echo "双引号解析: 项目 $APP 当前版本 $VER"
-echo '单引号原样输出: 项目 $APP 当前版本 $VER'
-
-# 2. 输出重定向测试
-echo "=== 构建日志开始 ===" > lab.log
-echo "记录一条状态数据" >> lab.log
-cat lab.log
-```
-> 运行方式：`bash 01_basics.sh` 或赋予权限后执行：`chmod +x 01_basics.sh && ./01_basics.sh`。
-
 ---
 
-##### (2) 条件分支与命令退出状态码 (`$?`)
-在 Linux 运维脚本中，任何一条命令执行完毕都会返回一个退出状态码（Exit Code）：
-*   `0`：表示命令**执行成功**。
-*   **非 0**（1–255）：表示命令**执行失败或出现异常**。
-*   环境变量 **`$?`** 永远保存**上一条命令**的退出状态码。
+#### 1. Shell 编程核心语法
 
-**动手练习（创建 `02_condition.sh`）**：
+##### (1) 变量引用与退出状态码 (`$?`)
+- **变量定义**：等号两侧严禁空格，如 `APP="demo"`。引用变量推荐使用 `${APP}`。
+- **引号机制**：
+  - 双引号 `""`（弱引用）：允许变量展开与命令替换；
+  - 单引号 `''`（强引用）：保持字符字面值，不进行变量解析。
+- **退出状态码（Exit Code）**：
+  - 进程执行完毕向操作系统返回整数状态码：`0` 表示执行成功，非 `0`（1~255）表示发生错误或异常；
+  - 环境变量 **`$?`** 保存上一条命令的退出状态码，必须在目标命令执行后**立即读取或暂存**，后续命令会覆盖其数值。
+
+**语法演练**：
 ```bash
 #!/bin/bash
-SCORE=85
+# 1. 引号对比
+NAME="Earendel"
+echo "弱引用: Current OS is $NAME"
+echo '强引用: Current OS is $NAME'
 
-# 1. 条件判断与目录检查 (-d 判断目录是否存在)
-if [ ! -d "results" ]; then
-  mkdir -p results
-  echo "创建了 results 目录"
+# 2. 状态码捕获
+ls /etc/hosts > /dev/null
+echo "成功命令退出码: $?"   # 输出 0
+
+ls /not_exist_file 2> /dev/null
+echo "失败命令退出码: $?"   # 输出非 0
+```
+
+##### (2) 流程控制结构（条件分支与循环）
+- **条件判断 (`if`)**：通过测试表达式 `[ 条件 ]` 进行逻辑判断，常用测试项包括：
+  - 文件检查：`-f <文件>`（普通文件存在）、`-d <目录>`（目录存在）；
+  - 数值比对：`-eq`（等于）、`-ne`（不等于）、`-ge`（大于等于）、`-lt`（小于）；
+  - 状态拦截：`if [ $? -ne 0 ]; then ... exit 1; fi`。
+- **循环结构 (`for` / `while`)**：
+  - `for 变量 in 列表; do ... done`：用于遍历数组或集合；
+  - `while [ 条件 ]; do ... done`：用于基于条件的循环执行。
+
+**语法演练**：
+```bash
+#!/bin/bash
+# 目录检查与创建
+if [ ! -d "build" ]; then
+  mkdir -p build
+  echo "创建构建目录: build/"
 fi
 
-# 2. 数值对比判断 (-ge: 大于等于, -lt: 小于)
-if [ $SCORE -ge 60 ]; then
-  echo "成绩合格: $SCORE 分"
-else
-  echo "成绩不合格: $SCORE 分"
-fi
-
-# 3. 状态码捕获测试
-ls lab.log > /dev/null
-echo "上一条成功命令的状态码: $?"   # 输出 0
-
-ls not_exist_file.txt > /dev/null 2>&1
-echo "上一条失败命令的状态码: $?"   # 输出非 0
-```
-> [!IMPORTANT]
-> **关键原则**：如果要对命令的退出状态做逻辑判断，必须在命令执行后**紧接着读取 `$?`**。如果在中间插入了其他命令（例如 `echo`），`$?` 会被刷新为后续命令的状态。
-
----
-
-##### (3) 循环结构与数组
-*   `for` 循环：用于遍历列表或集合。
-*   `while` 循环：用于基于条件的循环控制。
-*   数组操作：`${arr[@]}` 获取全部元素，`${#arr[@]}` 获取数组长度。
-
-**动手练习（创建 `03_loops.sh`）**：
-```bash
-#!/bin/bash
-# 1. for 循环遍历发布阶段
-PHASES=("Lint" "Compile" "Test" "Package")
-
-echo "执行流水线阶段（数组长度: ${#PHASES[@]}）："
-for stage in "${PHASES[@]}"
-do
-  echo "-> 正在执行: $stage"
+# 阶段遍历
+STAGES=("Lint" "Compile" "Test")
+for stage in "${STAGES[@]}"; do
+  echo "==> 执行阶段: $stage"
 done
-
-# 2. while 循环累加计算
-COUNT=1
-SUM=0
-while [ $COUNT -le 10 ]
-do
-  SUM=$((SUM + COUNT))
-  COUNT=$((COUNT + 1))
-done
-echo "1 到 10 累加总和为: $SUM"
 ```
 
----
-
-##### (4) Shell 函数与模块化封装
-Shell 函数通过 `$1`、`$2` 等位置参数接收调用参数，函数中的 `return` 用于返回状态码（0–255）。
-
-**动手练习（创建 `04_functions.sh`）**：
+##### (3) 函数与模块化封装
+Shell 函数通过 `$1`、`$2` 接收位置参数，内部可通过 `return` 返回状态码（0~255）：
 ```bash
-#!/bin/bash
-# 定义打印状态的函数
-log_status() {
+log_info() {
   local module=$1
-  local status=$2
-  echo "[$(date '+%Y-%m-%d %H:%M:%S')] 模块 [$module] 状态: $status"
+  local msg=$2
+  echo "[$(date '+%H:%M:%S')] [$module] $msg"
 }
 
-# 调用函数
-log_status "Kernel" "Running"
-log_status "Storage" "OK"
+log_info "BuildEngine" "Initialization complete."
 ```
 
 ---
 
-##### (5) 文本流处理与管道综合练习
-运维自动化中常使用文本工具处理编译日志与系统记录：
-*   `grep`：过滤匹配文本。
-*   `cut`：按列提取字段。
-*   `sort` / `uniq`：排序与去重。
-*   `wc -l`：统计行数。
-*   `tee`：既将数据输出到终端，又保存到文件。
+#### 2. ECC 编译器与 EAF 文件结构
 
-**动手练习**：
-准备测试日志 `builds.txt`：
+##### (1) ECC 编译器概述
+在标准 Linux 环境中，开发者使用 GCC/Clang 编译源码生成二进制 ELF 文件；在 Earendel 系统中，内置了教学编译工具链 **ECC**（Earendel Compiler Collection），用于将应用程序源码编译打包为可执行文件格式 **EAF**（Earendel Application Format）。
+
+基本命令格式：
 ```bash
-echo "2026-10-01 compile success" > builds.txt
-echo "2026-10-01 test success" >> builds.txt
-echo "2026-10-02 compile failed" >> builds.txt
-echo "2026-10-03 compile success" >> builds.txt
-echo "2026-10-03 test failed" >> builds.txt
-```
-
-执行以下文本分析流水线：
-```bash
-# 1. 筛选出所有失败记录并统计次数
-grep "failed" builds.txt | wc -l
-
-# 2. 提取并去重所有出现过的日期列表
-cut -d' ' -f1 builds.txt | sort | uniq
-
-# 3. 提取失败日志，屏幕展示的同时保存到 failed-builds.txt
-grep "failed" builds.txt | tee failed-builds.txt
-```
-
----
-
-#### 2. ECC 编译器与 EAF 可执行文件原理
-
-##### (1) ECC 编译器介绍
-在真实 Linux 环境中，开发者使用 GCC/Clang 编译 C/C++ 生成二进制 ELF 文件；而在 Earendel Web OS 中，系统内置了教学编译工具链 **ECC**（Earendel Compiler Collection）。
-
-ECC 负责将 JavaScript 应用源码及静态模块打包链接为 Earendel 原生可执行文件格式 —— **EAF**（Earendel Application Format）。
-
-ECC 的基本命令格式：
-```bash
-ecc <入口源文件.js> -o <输出文件.eaf> [编译选项]
+ecc <源文件.js> -o <输出文件.eaf> [编译选项]
 ```
 
 常用选项参数：
-*   `-o <文件路径>`：指定编译输出文件名。如果不带 `-o`，默认输出 `a.out.eaf`。
-*   `-O2`（或 `-O`）：启用代码优化（在当前实现中，会自动剥离无用的源码注释，精简代码体积）。
-*   `-s` / `--strip`：剥离符号表（去除调试与导出符号信息，大幅缩减文件大小）。
-*   `--embed <文件/目录>`：将静态配置文件或资源嵌入到生成的可执行文件中。
+- `-o <路径>`：指定编译输出文件路径（未指定时默认输出 `a.out.eaf`）；
+- `-O2`：启用优化模式，自动剔除无用注释与冗余空白，缩小文件体积；
+- `-s`（或 `--strip`）：剥离符号表（去除调试与导出符号信息，进一步减小体积）；
+- `--embed <资源路径>`：将静态配置或资源文件嵌入生成的可执行文件内部。
+
+##### (2) EAF 结构剖析与 ELF 概念映射
+EAF 借鉴了 Unix/Linux 经典 ELF（Executable and Linkable Format）的分段设计理念：
+
+| 组成部分 | Linux ELF 对应物 | Earendel EAF 对应字段 | 作用与说明 |
+| :--- | :--- | :--- | :--- |
+| **文件头标识** | ELF Magic Number (`0x7F 'E' 'L' 'F'`) | `magic: "EAF01"` | 标识文件格式合法性 |
+| **程序头信息** | ELF Header (入口地址、目标架构) | `header` (`entry`, `arch`, `type`) | 记录运行入口、平台架构与创建信息 |
+| **代码段** | `.text` Section (机器指令) | `.text` Section | 存放编译链接后的核心执行逻辑 |
+| **数据段** | `.data` Section (全局数据与常量) | `.data` Section | 存放应用元数据、配置项及嵌入的静态资源 |
+| **符号表** | `.symtab` / `.strtab` | `.symtab` Section | 记录符号与函数名映射，可由 `-s` 选项安全剥离 |
 
 ---
 
-##### (2) EAF 文件结构剖析
-EAF 借鉴了经典 Unix ELF（Executable and Linkable Format）文件的分段设计思想，采用分节（Sections）组织：
+#### 3. ECC 编译参数对照实验
 
-```text
-┌────────────────────────────── EAF 可执行结构 ─────────────────────────────┐
-│ magic: "EAF01"                 格式幻数（识别标志）                       │
-│ version: "1.0.0"               格式版本                                   │
-├─ header ──────────────────────────────────────────────────────────────────┤
-│ entry: "/home/hello/app.js"    程序入口源文件虚拟路径                     │
-│ type: "EXEC"                   文件类型（可执行文件）                     │
-│ arch: "js-vm"                  目标运行架构（Earendel 虚拟机）            │
-│ createdAt                      生成时间戳                                 │
-├─ sections ────────────────────────────────────────────────────────────────┤
-│ .text                           代码段：经编译静态链接后的 JS 核心代码     │
-│ .data                           数据段：应用元数据、配置与嵌入资源        │
-│ .imports                        导入段：声明调用的系统与环境接口列表       │
-│ .symtab                         符号表：导出函数与符号信息（-s 选项可剥离）│
-└───────────────────────────────────────────────────────────────────────────┘
-```
-
-**EAF 与传统 ELF/PE 的概念对照**：
-
-| 结构概念 | Linux ELF 对应物 | Earendel EAF 对应内容 | 教学功能说明 |
-|---|---|---|---|
-| **文件标识** | ELF Magic Number (`0x7F 'E' 'L' 'F'`) | `magic: "EAF01"` | 标识可执行文件格式类型 |
-| **文件头部** | ELF Header (入口地址、目标架构) | `header` 字段 (`entry`, `arch`) | 记录运行入口与架构环境 |
-| **代码段** | `.text` Section (机器指令) | `.text` Section (执行代码) | 存放实际由系统执行的核心逻辑 |
-| **数据段** | `.data` Section (全局数据/资源) | `.data` Section (含 embeds) | 存放嵌入的静态数据与运行时参数 |
-| **符号表** | `.symtab` / `.strtab` | `.symtab` Section | 调试和导出符号，可用 `-s` 剥离 |
-
----
-
-#### 3. ECC 编译对比实验
-
-在 `~/lab6` 下创建测试代码目录 `ecc-demo`：
-```bash
-mkdir -p ~/lab6/ecc-demo && cd ~/lab6/ecc-demo
-```
-
-编写一段带有注释的测试程序 `hello.js`：
+在 `~/lab6` 目录下创建测试代码 `hello.js`：
 ```javascript
-// 项目名称: Earendel ECC 教学程序
-// 开发者: Linux Lab
+// ECC Benchmark Program
+// Author: Linux Teaching Lab
 const title = "Linux Shell & Compiler Lab";
-const version = 1.0;
+const version = "1.0.0";
 
 console.log("=== " + title + " ===");
-console.log("Current Version: " + version);
+console.log("Build Version: " + version);
 ```
 
-##### 实验 1：常规编译与运行（体验 `-o`）
+依次执行不同参数的编译对比：
+
 ```bash
-mkdir -p build
+mkdir -p ~/lab6/build
+
+# 1. 基础编译：生成目标文件并执行
 ecc hello.js -o build/hello.eaf
-ls -l build
 ./build/hello.eaf
-```
-> **现象观察**：编译成功后生成 `hello.eaf`。直接通过 `./build/hello.eaf` 即可像运行 Linux 二进制程序一样执行它。
-> *思考*：尝试直接运行 `ecc hello.js`，查看默认生成的程序名是什么？
 
-##### 实验 2：代码优化对比（体验 `-O2`）
-```bash
-# 默认未优化编译
-ecc hello.js -o build/hello-debug.eaf
-
-# 开启 -O2 优化编译
+# 2. 优化对比 (-O2)：对比注释剥离效果
 ecc hello.js -O2 -o build/hello-o2.eaf
+grep "Benchmark" build/hello.eaf       # 保留了注释
+grep "Benchmark" build/hello-o2.eaf    # 注释已被剔除
 
-# 检查两个 EAF 文件中是否保留了注释
-grep "教学程序" build/hello-debug.eaf
-grep "教学程序" build/hello-o2.eaf
-```
-> **现象分析**：`-O2` 优化去除了源文件注释，使代码体积更加紧凑，而程序输出与功能不受任何影响。
+# 3. 符号剥离 (-s)：对比符号表分节
+ecc hello.js -s -o build/hello-stripped.eaf
+grep "symtab" build/hello.eaf          # 包含符号表
+grep "symtab" build/hello-stripped.eaf # 符号表已被移除
 
-##### 实验 3：符号表剥离（体验 `-s` 瘦身）
-```bash
-# 普通编译（保留符号表）
-ecc hello.js -o build/with-sym.eaf
-
-# 使用 -s 剥离符号表
-ecc hello.js -s -o build/stripped.eaf
-
-# 检查符号表是否存在
-grep "symtab" build/with-sym.eaf
-grep "symtab" build/stripped.eaf
-```
-> **现象分析**：加入 `-s` 编译后，生成的 EAF 文件不再包含 `.symtab` 分节，进一步降低了文件体积。
-
-##### 实验 4：编译错误捕获与返回值验证
-```bash
-# 1. 尝试编译一个不存在的源文件
-ecc missing.js -o build/err.eaf
-echo "错误文件编译返回值: $?"     # 观察输出非 0
-
-# 2. 传递非法参数
-ecc hello.js --target=unknown -o build/err.eaf
-echo "非法参数编译返回值: $?"     # 观察输出非 0
-```
-> **核心收获**：ECC 在遇到语法错误、参数错误或文件缺失时会返回非 0 状态码，这为编写自动化构建脚本提供了精准的条件拦截依据。
-
----
-
-### Part B：企业级实战——自动化构建与发布流水线（CI/CD）
-
-#### 1. 业务背景
-在现代软件工程中，任何代码发布都遵循**自动化流水线（CI/CD Pipeline）**。一个合格的运维发布脚本必须具备：
-1. **前置环境与源码检查**：文件不存在时立即阻断并报警。
-2. **构建过程状态拦截**：编译失败时严禁发布上线。
-3. **冒烟测试与验收**：编译完成后自动执行并校验运行结果。
-4. **生成审计报告**：记录构建时间、选项参数和最终状态。
-
----
-
-#### 2. 准备项目源代码
-
-在 `~/lab6/apollo` 目录下创建待发布的主程序 `app.js`：
-```bash
-mkdir -p ~/lab6/apollo && cd ~/lab6/apollo
-```
-
-编写 `app.js`：
-```javascript
-// 航天工程 Apollo 控制模块
-const mission = "Apollo Moon Landing";
-const launchYear = 2026;
-
-console.log("Mission Name: " + mission);
-console.log("Launch Year : " + launchYear);
-console.log("Status      : All Systems Nominal");
+# 4. 编译错误状态码拦截验证
+ecc missing_file.js -o build/err.eaf
+echo "错误编译退出码: $?"               # 输出非 0
 ```
 
 ---
 
-#### 3. 编写发布流水线脚本 `deploy.sh`
+### Part B：任务挑战 —— 自动化编译构建与发布流水线（CI/CD）
 
-在 `~/lab6/apollo/deploy.sh` 中实现完整构建流程：
+#### 1. 业务场景
+在软件工程与持续集成（CI/CD）流程中，为避免人工编译与发布可能产生的环境不一致和遗漏错误，需建立规范的自动化构建发布脚本 `deploy.sh`：
+1. **前置检查**：检查源码文件是否存在，异常时立即阻断；
+2. **流程编译**：调用 ECC 工具链进行代码优化与符号剥离，捕获并拦截编译失败状态；
+3. **冒烟测试**：自动执行生成的目标可执行程序，验证其退出状态码；
+4. **生成审计报告**：记录流水线构建时间、编译参数及最终发布状态至 `build-report.txt`；
+5. **健壮性测试**：模拟源码丢失与语法错误场景，验证脚本的异常阻断能力。
+
+---
+
+#### 2. 操作步骤
+
+##### 步骤一：创建项目源码文件
+在 `~/lab6/app_project` 目录下创建待发布的主程序 `app.js`：
+```bash
+mkdir -p ~/lab6/app_project && cd ~/lab6/app_project
+
+cat << 'EOF' > app.js
+// Production Application Module
+const appName = "ServiceMonitor";
+const releaseVersion = "2.0.0";
+
+console.log("Application : " + appName);
+console.log("Version     : " + releaseVersion);
+console.log("Status      : All services operational.");
+EOF
+```
+
+##### 步骤二：编写自动化构建流水线脚本 `deploy.sh`
+在 `~/lab6/app_project/deploy.sh` 中实现全流程流水线逻辑：
 
 ```bash
 #!/bin/bash
 # ==================================================
-# Apollo 工程自动化构建与发布流水线
+# 自动化构建与发布流水线脚本 (CI/CD Pipeline)
 # ==================================================
 
 SOURCE="app.js"
 BUILD_DIR="build"
-OUTPUT="build/apollo.eaf"
+OUTPUT="build/app.eaf"
 REPORT="build-report.txt"
 
-echo "=========================================="
-echo "开始执行 Apollo 自动化构建流水线"
-echo "=========================================="
+echo "=== 开始执行自动化构建发布流水线 ==="
 
-# 步骤 1：创建构建输出目录
+# 阶段 1: 创建输出目录
 mkdir -p $BUILD_DIR
 
-# 步骤 2：源码合规检查（阻断式设计）
+# 阶段 2: 源码文件前置检查
 if [ ! -f "$SOURCE" ]; then
-  echo "[ERROR] 源码文件 $SOURCE 不存在，流水线终止！"
+  echo "[ERROR] 源码文件 $SOURCE 不存在，流水线阻断终止。"
   exit 1
 fi
 echo "[PASS] 源码检查通过: $SOURCE"
 
-# 步骤 3：调用 ECC 编译工具链（开启 -O2 优化并剥离符号表 -s）
-echo "[BUILD] 正在调用 ECC 编译打包..."
+# 阶段 3: 调用 ECC 工具链进行优化与瘦身编译
+echo "[BUILD] 正在调用 ECC 编译程序 (参数: -O2 -s)..."
 ecc $SOURCE -O2 -s -o $OUTPUT
 BUILD_STATUS=$?
 
 if [ $BUILD_STATUS -ne 0 ]; then
-  echo "[ERROR] ECC 编译失败（状态码: $BUILD_STATUS），拒绝发布！"
+  echo "[ERROR] ECC 编译失败 (退出码: $BUILD_STATUS)，终止发布！"
   echo "Build Failed at $(date)" > $REPORT
   exit 2
 fi
 echo "[PASS] 编译成功，生成目标文件: $OUTPUT"
 
-# 步骤 4：自动化冒烟测试（执行生成的目标文件）
-echo "[TEST] 正在启动可执行程序进行功能自测..."
+# 阶段 4: 冒烟测试 (执行目标文件验证基本功能)
+echo "[TEST] 正在启动可执行文件进行冒烟测试..."
 ./$OUTPUT
 TEST_STATUS=$?
 
 if [ $TEST_STATUS -ne 0 ]; then
-  echo "[ERROR] 程序运行自测失败（状态码: $TEST_STATUS）！"
+  echo "[ERROR] 程序冒烟测试未通过 (退出码: $TEST_STATUS)！"
   exit 3
 fi
-echo "[PASS] 冒烟测试全部通过！"
+echo "[PASS] 冒烟测试全部通过。"
 
-# 步骤 5：生成构建归档报告
-echo "==========================================" > $REPORT
-echo "Apollo CI/CD 构建报告" >> $REPORT
-echo "构建时间: $(date)" >> $REPORT
-echo "入口源码: $SOURCE" >> $REPORT
-echo "输出文件: $OUTPUT" >> $REPORT
-echo "编译参数: -O2 -s" >> $REPORT
-echo "流水线状态: SUCCESS" >> $REPORT
-echo "==========================================" >> $REPORT
+# 阶段 5: 生成构建归档报告
+echo "=== CI/CD Build Audit Report ===" > $REPORT
+echo "Build Time: $(date)" >> $REPORT
+echo "Source File: $SOURCE" >> $REPORT
+echo "Target File: $OUTPUT" >> $REPORT
+echo "Compiler Flags: -O2 -s" >> $REPORT
+echo "Pipeline Status: SUCCESS" >> $REPORT
+echo "Student_ID: 20260001" >> $REPORT
+echo "Student_Name: ZhangSan" >> $REPORT
 
-echo "=========================================="
-echo "流水线执行完毕，构建报告已生成至: $REPORT"
-echo "=========================================="
+echo "=== 流水线执行成功，构建报告已生成至: $REPORT ==="
 ```
 
----
-
-#### 4. 赋予权限并验证构建
-
-```bash
-# 赋予可执行权限
-chmod +x deploy.sh
-
-# 执行流水线构建
-./deploy.sh
-
-# 查看最终生成的构建报告
-cat build-report.txt
-```
-
----
-
-#### 5. 故障注入与健壮性测试
-
-为了验证脚本的健壮性，请模拟以下运维突发事故：
-
-1. **测试用例 1：源文件丢失测试**
+##### 步骤三：配置执行权限与正常流水线测试
+1. 赋予脚本执行权限：
    ```bash
+   chmod +x deploy.sh
+   ```
+2. 运行构建流水线：
+   ```bash
+   ./deploy.sh
+   ```
+3. 查看生成的构建审计报告：
+   ```bash
+   cat build-report.txt
+   ```
+
+##### 步骤四：异常注入与脚本健壮性测试
+1. **测试用例 1：源码文件丢失阻断测试**
+   ```bash
+   # 临时移走源码文件
    mv app.js app.js.bak
    ./deploy.sh
    echo "流水线退出码: $?"
+   # 确认终端阻断在阶段 2，退出码为 1
+   
+   # 恢复源码文件
+   mv app.js.bak app.js
    ```
-   *预期现象*：脚本检测到源码丢失，立即报错退出，退出码为 `1`，且不会执行后续编译。
-   *恢复操作*：`mv app.js.bak app.js`
 
-2. **测试用例 2：语法/编译错误阻断测试**
-   修改 `app.js`，在第一行写入一段非法代码（如 `import "unknown_lib";` 或直接写入乱码字符）。
+2. **测试用例 2：语法错误编译拦截测试**
    ```bash
+   # 在源码中注入非法语法
+   echo "invalid_syntax_error %%%;" > app.js
    ./deploy.sh
    echo "流水线退出码: $?"
+   # 确认终端在阶段 3 编译失败并安全退出，退出码为 2
+   
+   # 恢复正确的源码并验证重新构建
+   cat << 'EOF' > app.js
+   // Production Application Module
+   const appName = "ServiceMonitor";
+   const releaseVersion = "2.0.0";
+   console.log("Application : " + appName);
+   console.log("Version     : " + releaseVersion);
+   console.log("Status      : All services operational.");
+   EOF
+   
+   ./deploy.sh
    ```
-   *预期现象*：ECC 编译报错，`BUILD_STATUS` 捕获到非零状态码，脚本直接在步骤 3 终止，拒绝运行有缺陷的程序。
-   *恢复操作*：修好 `app.js`，重新运行 `./deploy.sh` 恢复绿色构建状态。
 
 ---
 
-### 思考与延伸
+### 实验交付与评分标准
 
-1. **状态码时效性**：在 Shell 脚本中，为什么必须在目标命令执行后**立刻**将 `$?` 赋值给变量？如果中间执行了 `echo` 会发生什么？
-2. **编译器参数权衡**：ECC 的 `-O2` 与 `-s` 选项分别改变了输出文件中的什么内容？在生产部署时为什么通常建议同时开启它们？
-3. **架构类比**：EAF 文件的 `.text` 和 `.data` 段分别存放什么？它与 Linux 系统下的 ELF 格式在设计思想上有何异同？
-4. **运维实践延伸**：如果需要让这个构建流水线在服务器上每天凌晨 2 点自动拉取代码并构建，你应该如何配置 `crontab` 定时任务？
+#### 交付物
+- 自动化构建脚本文件：`~/lab6/app_project/deploy.sh`
+- 构建归档审计报告：`~/lab6/app_project/build-report.txt`
+
+#### 评分标准（满分 100 分）
+
+| 评分维度 | 分值 | 考察知识点 | 评分指标与判定标准 |
+| :--- | :---: | :--- | :--- |
+| **Shell 语法与流程控制** | 25分 | 变量, `if` 分支, 函数 | 脚本语法严谨无报错，正确运用变量引用与条件判断 |
+| **状态码捕获与阶段拦截** | 25分 | `$?`, `exit <N>` | 正确捕获编译与测试返回值，在异常发生时安全阻断且退出码符合要求 |
+| **编译参数与 EAF 验证** | 25分 | `ecc -o -O2 -s` | 熟练运用 ECC 核心参数，准确说明 `-O2`（注释剥离）与 `-s`（符号剥离）的实际效果 |
+| **流水线交付与审计报告** | 15分 | 冒烟测试, 重定向 | 成功执行冒烟测试，规范生成 `build-report.txt`，包含编译参数与签名 |
+| **健壮性与故障注入测试** | 10分 | 异常处理, 边界测试 | 准确复现源码丢失与编译错误拦截，验证流水线脚本健壮性 |
 
 ---
 
-### 实验报告与提交规范
+### 思考与进阶拓展
 
-#### 1. 提交文件清单
-*   `01_basics.sh`、`02_condition.sh`、`03_loops.sh`、`04_functions.sh` 脚本文件。
-*   `builds.txt` 与提取后的 `failed-builds.txt`。
-*   ECC 参数对比实验记录（记录 `-O2` 与 `-s` 在 `grep` 下的实际效果差异截图或终端输出）。
-*   `deploy.sh` 源码文件及成功生成的 `build-report.txt`。
-*   故障注入测试的终端执行截图与退出码记录。
-
-#### 2. 评分要点（总分 100 分）
-*   **Shell 基础语法与文本流（30 分）**：变量引用、条件分支、循环结构与管道文本处理完整无误。
-*   **编译工具链理解与实验（30 分）**：熟练运用 ECC 参数，准确说明 `-o`、`-O2`、`-s` 对 EAF 结构的实际影响。
-*   **CI/CD 自动化流水线实现（30 分）**：`deploy.sh` 逻辑严密，正确拦截各阶段错误并规范生成报告。
-*   **故障注入测试与实验结论（10 分）**：故障复现真实可靠，思考题回答准确。
+1. **状态码的时效性与暂存机制**：在 Shell 脚本中，为什么必须在目标命令执行后紧接着将 `$?` 赋值给变量（例如 `STATUS=$?`）？如果中间穿插了 `echo` 或其它命令，会导致什么逻辑缺陷？
+2. **编译器参数权衡与安全考量**：在生产交付环境中，为何推荐对可执行文件执行符号表剥离（`-s`）？除了减小文件存储体积外，从系统安全的角度看还有何收益？
+3. **分段式可执行文件结构的设计优势**：EAF 与 Linux ELF 均采用分段（Section/Segment）思想将代码（`.text`）与数据（`.data`）分离存放。这种结构在内存保护、权限管理（如代码段只读可执行，数据段可读写不可执行）方面有何优势？

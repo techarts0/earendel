@@ -408,7 +408,7 @@ export const userCommands: Command[] = [
     name: 'su',
     description: 'Change user ID or become superuser (supports su -, su <user>, -c <cmd>)',
     category: 'sys',
-    execute: (ctx) => {
+    execute: async (ctx) => {
       let targetUser = 'root';
       let commandLine: string | undefined;
       for (let i = 0; i < ctx.args.length; i++) {
@@ -422,6 +422,9 @@ export const userCommands: Command[] = [
       const passwd = ctx.vfs.readFile('/etc/passwd') ?? '';
       if (targetUser !== 'root' && !passwd.split('\n').some((line) => line.startsWith(`${targetUser}:`))) {
         return { stdout: '', stderr: `su: user ${targetUser} does not exist\n`, exitCode: 1 };
+      }
+      if (commandLine && (ctx.env['USER'] || 'hello') === 'root' && typeof ctx.shellEngine?.executeAsUser === 'function') {
+        return await ctx.shellEngine.executeAsUser(targetUser, commandLine);
       }
       return {
         stdout: '',
@@ -631,6 +634,7 @@ export const userCommands: Command[] = [
       const commandLine = interactiveRootShell ? '__EAR_ENDEL_SUDO_ROOT_SHELL__' : ctx.args.join(' ');
       // Always authenticate in the terminal. USER is an ordinary shell variable and
       // must not be sufficient to bypass sudo's password prompt.
+
       return {
         stdout: '',
         stderr: '',

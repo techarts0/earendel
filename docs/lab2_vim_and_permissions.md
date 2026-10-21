@@ -1,19 +1,17 @@
-## 实验二：VIM 编辑器与多用户权限
+## 实验二：VIM 编辑器与多用户权限管理
 
 - **适用课程**：Linux 操作系统
 - **推荐学时**：3 学时 (讲授 1 学时，练习 2 学时)
 - **实验平台**：Earendel Web OS [https://earendel.techarts.cn]
 
-
 ---
 
 ### 实验目标
 
-1. **学会 VIM 核心编辑技能**：理解 VIM 的三种核心模式（正常命令模式、插入编辑模式、末行/底行命令模式）的工作原理与切换逻辑，告别“不会退出、乱码误删”的困境。
-2. **形成键盘肌肉记忆**：熟练掌握光标快速跳转、文本复制/粘贴（`yy`/`p`）、行删除/剪切（`dd`）、撤销与重做（`u`/`Ctrl+r`）、末行全局正则替换（`:%s`）以及安全保存退出（`:wq` / `:q!`）。
-3. **系统掌握用户与组管理**：深入理解 `/etc/passwd`、`/etc/shadow`、`/etc/group` 结构，熟练运用 `useradd`、`usermod`、`userdel`、`groupadd`、`passwd`、`id`、`su`、`sudo` 进行多用户账号生命周期治理。
-4. **理解 POSIX 文件权限模型**：深刻理解文件权限位（`-rwxr-xr--`）构成，分清读（r）、写（w）、执行（x）在“普通文件”与“目录”上的本质区别。
-5. **掌握权限与归属管控艺术**：熟练运用八进制数值法（755、644、700）与符号运算法（`u+x`, `g-w`, `o=r`），熟练使用 `chmod`、`chown`、`chgrp` 落地生产最小特权安全基线。
+1. **掌握 VIM 编辑器核心模式与操作**：掌握正常命令模式、插入编辑模式、末行模式的工作原理与切换方法，熟练运用光标定位、文本复制粘贴、整行删除、撤销重做、全局替换与保存退出。
+2. **掌握用户与用户组管理体系**：理解 `/etc/passwd`、`/etc/shadow` 与 `/etc/group` 文件的组织结构，熟练运用 `useradd`、`usermod`、`userdel`、`groupadd`、`id`、`su`、`sudo` 进行账号与组的生命周期管理。
+3. **理解 POSIX 文件权限模型**：掌握文件类型与 9 位权限位（`rwxrwxrwx`）的组成结构，明确读（r）、写（w）、执行（x）在普通文件与目录对象上的实际含义差异。
+4. **熟练配置权限与属主属组**：掌握八进制数值法（如 755、644、770）与符号表示法（如 `u+x`, `g-w`, `o=r`），熟练使用 `chmod`、`chown`、`chgrp` 实施安全基线与目录访问隔离。
 
 ---
 
@@ -21,101 +19,98 @@
 
 ---
 
-#### 1. 理论精讲：Linux 文件权限与所有权模型（预备知识）
+#### 1. Linux 文件权限与所有权模型
 
 > [!NOTE]
-> **预备理论**：在 Linux 系统中，一切皆文件。每一个文件和目录都严格绑定了“谁拥有它（所有者与所属组）”以及“谁能对它做什么（读/写/执行权限）”。
+> **预备理论**：在 Linux 系统中，一切资源皆表现为文件形式。系统为每个文件与目录维护其所有者（User/Owner）、所属组（Group）以及访问控制权限位，用于决定不同身份用户的读、写、执行能力。
 
-##### (1) 权限属性字符串拆解（10 个字符）
-执行 `ls -l` 时，每行开头展示的 10 位字符决定了该资源的生杀大权：
+##### (1) 权限属性字符串结构
+使用 `ls -l` 查看长格式列表时，输出首部的 10 位字符表示文件类型与权限位分布：
 ```text
   -  r w x  r - x  r - -
   ┬  ─────  ─────  ─────
   │    │      │      │
-  │    │      │      └── 4. Other 权限：其他任何人（既非属主，也不在属组）的权限
-  │    │      └──────── 3. Group 权限：文件所属用户组的成员拥有的权限
-  │    └────────────── 2. User 权限：文件所有者（属主）独享的权限
-  └────────────────── 1. 类型标识：'-' 代表普通文件，'d' 代表目录，'l' 代表软链接
+  │    │      │      └── Other 权限：除属主与属组成员外的其他用户访问权限
+  │    │      └──────── Group 权限：文件所属用户组成员的访问权限
+  │    └────────────── User 权限：文件所有者独享的访问权限
+  └────────────────── 类型标识：'-' 普通文件，'d' 目录，'l' 符号链接
 ```
 
-##### (2) 权限位（r, w, x）在“文件”与“目录”上的核心区别（高频考点）
+##### (2) 权限位（r, w, x）在文件与目录上的含义差异
 
-| 权限符号 | 对应数值 | 对**普通文件**的含义 | 对**目录**的含义（关键易错点！） |
+| 权限符号 | 对应数值 | 对**普通文件**的作用 | 对**目录**的作用 |
 | :---: | :---: | :--- | :--- |
-| **`r`** (Read) | **4** | 可查看文件内容（如 `cat`, `more`） | 可列出目录下的内容文件名（如 `ls` 查看文件名列表） |
-| **`w`** (Write)| **2** | 可修改或覆盖文件内容（如 `vim` 保存） | 可在该目录下**新建、删除、重命名**文件（决定文件生死的权力） |
-| **`x`** (eXecute)| **1** | 可作为程序或脚本执行（如 `./run.sh`）| 可**进入**该目录（如 `cd` 进去）并访问内部文件的元数据 |
+| **`r`** (Read) | **4** | 允许读取文件内容（如 `cat`, `head`） | 允许列出目录包含的文件名列表（如 `ls`） |
+| **`w`** (Write)| **2** | 允许修改或追加文件内容（如 `vim` 保存） | 允许在目录下创建、删除、重命名文件 |
+| **`x`** (eXecute)| **1** | 允许将文件作为程序或脚本执行（如 `./run.sh`） | 允许进入该目录（如 `cd`）并访问内部文件的元数据 |
 
 > [!WARNING]
-> **陷阱警示**：如果对一个目录只有 `r` 权限而没有 `x` 权限，你能看到目录里有哪些文件名，但**绝对无法 `cd` 进去**，也无法读取里面文件的详细内容！
+> **注意事项**：若对目录仅具备 `r` 权限而无 `x` 权限，用户虽可通过 `ls` 获取目录内的文件名列表，但无法通过 `cd` 进入该目录，亦无法读取内部文件的具体内容。
 
-##### (3) 权限计算与八进制对照表
-权限使用二进制求和，每组 3 位取值范围为 `0 ~ 7`：
-- `rwx` = 4 + 2 + 1 = **7**（完全控制）
-- `rw-` = 4 + 2 + 0 = **6**（可读可写，通常用于配置文件与文档）
-- `r-x` = 4 + 0 + 1 = **5**（可读可执行/可进入，通常用于脚本与目录）
-- `r--` = 4 + 0 + 0 = **4**（只读）
+##### (3) 权限数值计算与八进制对应
+每组权限由 3 个二进制位组合计算而成，取值范围为 `0 ~ 7`：
+- `rwx` = 4 + 2 + 1 = **7**（完全访问控制）
+- `rw-` = 4 + 2 + 0 = **6**（读写权限，常用于配置文件与文本数据）
+- `r-x` = 4 + 0 + 1 = **5**（读与执行/进入权限，常用于脚本与目录）
+- `r--` = 4 + 0 + 0 = **4**（只读权限）
 - `---` = 0 + 0 + 0 = **0**（无任何权限）
 
 ---
 
-#### 2. 权限与所有权管控命令详析 (`chmod`, `chown`, `chgrp`)
+#### 2. 权限与所有权配置命令 (`chmod`, `chown`, `chgrp`)
 
-##### (1) `chmod`：修改权限（Change Mode）
-`chmod` 支持两种修改方式：
-- **八进制数值法**（生产环境最常用、最快捷）：
+##### (1) `chmod`：修改访问权限
+支持两种指定方式：
+- **八进制数值法**：
   ```bash
-  chmod 755 run.sh       # 属主 rwx(7)，属组 r-x(5)，其他人 r-x(5)
-  chmod 644 config.conf  # 属主 rw-(6)，属组 r--(4)，其他人 r--(4)
-  chmod 700 private_dir  # 仅属主拥有全部权限，其余人完全隔离
+  chmod 755 run.sh       # 属主 rwx(7)，属组 r-x(5)，其他用户 r-x(5)
+  chmod 644 config.conf  # 属主 rw-(6)，属组 r--(4)，其他用户 r--(4)
+  chmod 700 private_dir  # 仅属主拥有完整权限，其他身份无访问权
   ```
-- **符号运算法**（适用于只想增减某项权限，不破坏原有其它权限）：
-  - 对象：`u` (User 属主), `g` (Group 属组), `o` (Other 其他人), `a` (All 所有人)
-  - 操作：`+` (赋予), `-` (收回), `=` (强制赋予且清除其他)
+- **符号表示法**：
+  - 操作对象：`u` (User 属主), `g` (Group 属组), `o` (Other 其他), `a` (All 全部用户)
+  - 运算符号：`+` (添加), `-` (收回), `=` (精确设定)
   ```bash
-  chmod +x build.sh       # 为所有人增加可执行权限
-  chmod g+w shared_doc    # 为所属组成员增加写权限
-  chmod o-r secret.txt    # 移除外界其他人的读权限
-  chmod u=rwx,go=r file   # 属主全权，组和其他人只读
+  chmod +x build.sh       # 为所有用户添加可执行权限
+  chmod g+w shared_doc    # 为所属组成员添加写权限
+  chmod o-r secret.txt    # 移除其他用户的读权限
+  chmod u=rwx,go=r file   # 属主具备读写执行，组与其他用户只读
   ```
 
-##### (2) `chown` 与 `chgrp`：修改归属所有者与所属组
-- `chown`（Change Owner）：既可改属主，也可同时改属组：
+##### (2) `chown` 与 `chgrp`：修改文件所有者与所属组
+- `chown`：修改文件所有者，亦可一并修改所属组：
   ```bash
-  chown alice file.txt          # 仅将属主改为 alice
-  chown alice:developers dir    # 将属主改为 alice，属组改为 developers
-  chown -R alice:developers dir # -R 递归修改目录下所有子文件和子目录
+  chown alice file.txt          # 仅变更属主为 alice
+  chown alice:devgroup dir      # 同时变更属主为 alice，属组为 devgroup
+  chown -R alice:devgroup dir   # -R 递归处理目录下所有子项
   ```
-- `chgrp`（Change Group）：专门修改文件所属组：
+- `chgrp`：单独修改文件所属组：
   ```bash
-  chgrp developers project/     # 将 project 目录的属组改为 developers
+  chgrp devgroup project/       # 将 project 目录所属组修改为 devgroup
   ```
 
 ---
 
-#### 3. 用户与用户组管理核心命令
+#### 3. 用户与组管理核心命令
 
-在多用户操作系统中，必须熟练掌握账号生命周期治理与特权提权机制：
-
-| 分类 | 常用命令与关键选项 | 功能描述与生产场景 | 演练示例 |
+| 分类 | 命令与常用选项 | 说明 | 示例 |
 | :--- | :--- | :--- | :--- |
-| **查询身份** | `whoami` | 打印当前登录终端的有效用户名 | `whoami` |
-| | `id [用户名]` | 打印 UID、GID 及所属的所有附加组 | `id alice` |
-| | `groups [用户名]` | 查看指定用户加入的所有组列表 | `groups alice` |
-| **组管理** | `groupadd [组名]` | 新建一个用户组 | `groupadd devops` |
-| | `groupdel [组名]` | 删除一个空的用户组 | `groupdel devops` |
-| **用户管理** | `useradd -m -s <shell> <用户名>`| 新建用户（`-m` 强制创建家目录 `/home/用户名`）| `useradd -m -s /bin/bash bob` |
-| | `usermod -aG <附加组> <用户名>` | 将用户加入附加组（`-aG` 追加组，绝不能漏 `-a`）| `usermod -aG devops bob` |
-| | `passwd <用户名>` | 设置或重置用户密码 | `passwd bob` |
-| | `userdel -r <用户名>` | 删除用户（`-r` 同时清理其家目录与邮件池） | `userdel -r bob` |
-| **身份切换** | `su - [用户名]` | 完整切换至指定用户环境（`-` 会载入该用户的环境变量）| `su - bob` ➔ `exit` 退出 |
-| | `sudo <命令>` | 以超级管理员（root）特权临时执行单条指令 | `sudo cat /etc/shadow` |
+| **身份查询** | `whoami` | 显示当前登录终端的有效用户名 | `whoami` |
+| | `id [用户名]` | 输出用户的 UID、GID 及所属所有组信息 | `id alice` |
+| | `groups [用户名]` | 查看指定用户所属的用户组列表 | `groups alice` |
+| **组管理** | `groupadd [组名]` | 新建用户组 | `groupadd devops` |
+| | `groupdel [组名]` | 删除空用户组 | `groupdel devops` |
+| **用户管理** | `useradd -m -g <主组> <用户名>` | 新建用户（`-m` 创建家目录，`-g` 指定主组） | `useradd -m -g devops bob` |
+| | `usermod -aG <附加组> <用户名>` | 将用户加入附加组（`-a` 追加） | `usermod -aG devops bob` |
+| | `userdel -r <用户名>` | 删除用户账户（`-r` 同时删除家目录） | `userdel -r bob` |
+| **切换与提权** | `su - [用户名]` | 切换至指定用户环境（`-` 加载目标用户环境变量） | `su - bob` |
+| | `sudo <命令>` | 以管理员（root）特权执行单条命令 | `sudo cat /etc/shadow` |
 
 ---
 
-#### 4. VIM 核心操作速查表（肌肉记忆指南）
+#### 4. VIM 核心模式与常用按键
 
-请在终端输入 `vim demo.txt`，重点演练三种模式的切换与按键：
+在终端执行 `vim demo.txt`，重点练习三种模式之间的转换与核心命令：
 
 ```text
                ┌───────────────────────┐
@@ -125,7 +120,7 @@
        i, a, o   │                   │ Esc
                  │                   ▼
   ┌──────────────────────────────────────────────┐
-  │              正常命令模式 (Normal)            │ ◄── 默认模式，按键即命令
+  │              正常命令模式 (Normal)            │ ◄── 启动默认模式，输入按键作为操作指令
   └──────────────────────────────────────────────┘
                  │                   ▲
            :     │                   │ Esc
@@ -135,51 +130,49 @@
                └───────────────────────┘
 ```
 
-| 维度 | 按键 / 命令 | 功能与效果 | 演练指南 |
+| 维度 | 按键 / 命令 | 功能与效果 | 使用说明 |
 | :--- | :--- | :--- | :--- |
-| **模式切换** | `i` | 在光标**当前位置前**切换为输入状态 | 常用编辑入口 |
-| | `o` | 在光标**下方新建一行**并直接进入输入状态 | 极度顺手的换行写代码方式 |
-| | `Esc` | 立即退出当前状态，回到**正常命令模式** | 遇到任何不确定情况，连按两下 `Esc` |
-| | `:` | 在命令模式下按冒号，光标跳转至底部**末行模式**| 用于输入保存、退出、搜索替换指令 |
-| **移动光标** | `gg` / `G` | 快速跳至文件**第一行** / **最后一行** | 长配置文件快速翻顶/翻底 |
-| | `<行号>G` | 快速精准跳转至指定行 | 如 `15G` 直接定位至第 15 行 |
-| | `0` / `$` | 跳转至当前行的**行首** / **行末** | 单行快速穿梭 |
-| **编辑技巧** | `yy` / `3yy` | 复制当前单行 / 连续复制 3 行 | 配合 `p` 粘贴 |
-| | `p` | 将复制或剪切的内容粘贴到光标下方 | 粘贴指令 |
-| | `dd` / `2dd` | 删除（剪切）当前行 / 连续删除 2 行 | 极速删行 |
-| | `u` / `Ctrl+r` | **撤销**上一次操作 / **重做**（反向撤销） | 改错挽回必备 |
-| **查找替换** | `/关键字` | 向下搜索关键字，按 `n` 下一个，`N` 上一个 | 如 `/listen` 快速搜配置项 |
-| | `:%s/old/new/g` | **全局替换**：将全文所有 `old` 替换为 `new` | `:%s/8080/9090/g` 批量修改端口 |
-| **保存退出** | `:wq` 或 `ZZ` | 保存文件修改并正常退出 | 日常标准退出 |
-| | `:q!` | **强制退出并不保存**任何改动 | 配置写坏了不想保存时的安全退路 |
-
-> [!TIP]
-> **可选拓展：Earendel VIM AI 注释辅助 (`:gen`)**
-> 在 Earendel 终端的 VIM 中，如果你在末行模式输入 `:gen`，系统会根据当前光标所在的注释行尝试自动生成代码/配置。*(注：该特性需配置 API Key，本实验以熟练掌握原生 VIM 手工编辑为主，该命令作为了解项即可)*。
+| **模式切换** | `i` | 在光标当前位置前进入插入模式 | 最基础的输入入口 |
+| | `o` | 在光标所在行下方新建一行并进入插入模式 | 常用换行编辑方式 |
+| | `Esc` | 退出当前编辑状态，返回正常命令模式 | 处于未知状态时连按两次可复位 |
+| | `:` | 在命令模式下进入末行底行模式 | 用于执行保存、退出、搜索替换等指令 |
+| **光标移动** | `gg` / `G` | 快速定位至文件首行 / 末行 | 长文件定位首尾 |
+| | `<行号>G` | 定位至指定行号 | 如 `15G` 定位到第 15 行 |
+| | `0` / `$` | 定位至当前行的行首 / 行末 | 行内移动 |
+| **文本编辑** | `yy` / `<N>yy` | 复制光标所在行 / 复制光标开始的连续 N 行 | 配合 `p` 粘贴 |
+| | `p` | 将复制或删除的内容粘贴到光标下方 | 粘贴内容 |
+| | `dd` / `<N>dd` | 删除（剪切）光标所在行 / 连续删除 N 行 | 行删除 |
+| | `u` / `Ctrl+r` | 撤销上一步操作 / 重做（反撤销） | 误操作恢复 |
+| **查找替换** | `/关键词` | 向下检索关键字，按 `n` 查找下一个，`N` 查找上一个 | 快速检索配置项 |
+| | `:%s/old/new/g` | 全局正则替换：将全文所有 `old` 替换为 `new` | 批量修改配置 |
+| **保存退出** | `:wq` | 保存当前更改并退出 VIM | 标准保存退出 |
+| | `:q!` | 强制退出且放弃所有修改 | 放弃不正确修改的安全方式 |
 
 ---
 
-### Part B：任务挑战 —— 企业级服务配置加固与跨部门协作权限管理
+### Part B：任务挑战 —— 服务配置维护与跨部门协作权限管理
 
-#### 1. 业务背景
-“阿波罗研发中心”正在投产核心微服务组件。目前生产服务器存在两项严重安全隐患：
-1. 主配置文件 `/etc/apollo_service.conf` 存在遗留的测试脏数据与端口冲突，且文件权限过于宽松（全员可读可写），存在被普通用户随意篡改的灾难性风险；
-2. 团队新加入两位成员：运维工程师 `ops_eva`（属于 `devops` 组）与实习开发人员 `intern_leo`（属于 `interns` 组）。需为 `devops` 团队开辟共享协作沙盒 `/data/apollo_shared/`，严防实习生及外部人员越权窥探。
+#### 1. 业务场景
+系统管理人员需维护服务器上的应用配置文件并建立安全的团队协作目录：
+1. 修复主配置文件 `/etc/app_service.conf` 中的格式错误与废弃调试项，使用全局替换更新端口配置，并将文件权限收敛为只读（644），防止未授权篡改；
+2. 建立运维工程组（`devops`）与普通实习组（`interns`），分别创建对应用户并配置组归属；
+3. 为 `devops` 组建立专用的协作共享目录 `/data/shared_workspace`，设置严格的组隔离权限（770），验证非组成员无权访问；
+4. 导出安全审计报告文件 `~/permission_audit.txt` 并附带签名。
 
 ---
 
-#### 2. 挑战操作步骤
+#### 2. 操作步骤
 
-##### 步骤一：创建生产配置文件初始模板
-在终端中执行以下指令，构造一份存在缺陷的待修复配置文件：
+##### 步骤一：创建待维护的初始配置文件
+在终端中执行以下指令，生成待修复的配置文件模板：
 ```bash
 sudo mkdir -p /etc
-cat << 'EOF' | sudo tee /etc/apollo_service.conf
-# Apollo Cluster Service Configuration (PROD)
-# Temporary Debug Line: Please remove this garbage line immediately!
+cat << 'EOF' | sudo tee /etc/app_service.conf
+# Cluster Service Configuration (PROD)
+# Temporary Debug Line: Please remove this debug comment!
 
 [Server]
-server_name = apollo_node_test
+server_name = app_node_test
 listen_port = 8080
 max_workers = 4
 debug_mode = true
@@ -194,139 +187,138 @@ proxy_port = 8080
 EOF
 ```
 
-##### 步骤二：使用 VIM 深度修复配置文件 (`vim`, `dd`, `:%s`, `0`, `$`)
-使用管理员权限打开该配置文件：
+##### 步骤二：使用 VIM 修复配置文件 (`vim`, `dd`, `:%s`, `0`, `$`)
+使用管理员权限打开配置文件：
 ```bash
-sudo vim /etc/apollo_service.conf
+sudo vim /etc/app_service.conf
 ```
-严格在 VIM 内按以下要求完成规范修复：
-1. **删除废弃注释**：光标移动到第 2 行（`# Temporary Debug Line...`），在命令模式下按下 `dd` 将该废弃调试行整行删除。
-2. **全局端口正则替换**：将配置中所有的 `8080` 统一替换为生产专用端口 `9090`。在末行模式输入：
+在 VIM 中按以下要求完成编辑操作：
+1. **删除调试行**：移动光标至第 2 行（`# Temporary Debug Line...`），在命令模式下按 `dd` 删除该注释行。
+2. **全局替换端口**：将文件中所有 `8080` 统一替换为生产端口 `9090`，在末行模式下输入：
    ```vim
    :%s/8080/9090/g
    ```
-3. **参数手工修订**：
-   - 找到 `server_name = apollo_node_test`，使用键盘导航进入插入模式，修改为 `server_name = apollo_node_prod`。
-   - 找到 `debug_mode = true`，修改为 `debug_mode = false`。
-4. **追加安全字段**：
-   - 跳至文件末尾（输入 `G`），按 `o` 在新行插入如下两行生产安全配置：
+3. **参数修订**：
+   - 将 `server_name = app_node_test` 修改为 `server_name = app_node_prod`；
+   - 将 `debug_mode = true` 修改为 `debug_mode = false`。
+4. **追加配置节**：
+   - 移动光标至文件末尾（输入 `G`），按 `o` 插入新行，输入以下配置内容：
      ```ini
      [Security]
      enable_firewall = true
      ```
-5. 保存退出：按 `Esc`，输入 `:wq` 保存并退出。
+5. **保存并退出**：按 `Esc` 返回命令模式，输入 `:wq` 保存退出。
 
-##### 步骤三：用户组与多账号生命周期治理 (`groupadd`, `useradd`, `usermod`, `id`)
-1. **创建专属业务用户组**：
+##### 步骤三：用户组与多账号生命周期管理 (`groupadd`, `useradd`, `id`)
+1. **创建工作组**：
    ```bash
    sudo groupadd devops
    sudo groupadd interns
    ```
-2. **创建用户并配置初始归属**：
-   - 创建运维工程师 `ops_eva`，为其建立家目录，并将其直接加入 `devops` 组：
+2. **创建用户账户并指定主组**：
+   - 创建运维人员 `ops_eva`，为其建立家目录并加入 `devops` 组：
      ```bash
      sudo useradd -m -g devops ops_eva
      ```
-   - 创建实习生账号 `intern_leo`，为其建立家目录，加入 `interns` 组：
+   - 创建测试人员 `intern_leo`，为其建立家目录并加入 `interns` 组：
      ```bash
      sudo useradd -m -g interns intern_leo
      ```
-3. **使用 `id` 验证账号属性**：
+3. **验证账户属性**：
    ```bash
    id ops_eva
    id intern_leo
    ```
-   *确认两者的 UID、主组 GID 符合隔离预期。*
+   *核对两者的 UID、主组 GID 及所属组划分情况。*
 
-##### 步骤四：配置文件最小特权治理与越权防范 (`chmod`, `chown`, `su`)
-1. **加固生产配置文件**：
-   - 确保该配置文件的属主为 `root`，属组为 `root`：
+##### 步骤四：配置文件访问控制与写入权限验证 (`chmod`, `chown`, `su`)
+1. **收紧配置文件权限**：
+   - 设定配置文件属主与属组为 `root:root`：
      ```bash
-     sudo chown root:root /etc/apollo_service.conf
+     sudo chown root:root /etc/app_service.conf
      ```
-   - 将其权限设置为标准的 **644**（`rw-r--r--`：属主可读写，其他所有人仅只读）：
+   - 设置权限为标准 **644**（`rw-r--r--`）：
      ```bash
-     sudo chmod 644 /etc/apollo_service.conf
+     sudo chmod 644 /etc/app_service.conf
      ```
-2. **模拟黑客/越权篡改验证**：
-   - 切换为实习生 `intern_leo` 身份：
+2. **验证只读限制**：
+   - 切换为普通用户 `intern_leo` 身份：
      ```bash
      su - intern_leo
      ```
-   - 尝试直接用命令向受保护的配置追加恶意内容：
+   - 尝试向配置文件追加内容：
      ```bash
-     echo "hacked_by_leo = true" >> /etc/apollo_service.conf
+     echo "unauthorized_change = true" >> /etc/app_service.conf
      ```
-   - **预期现象**：控制台拦截并输出 `Permission denied`，证明系统只读策略有效！
-   - 执行 `exit` 退出 `intern_leo` 终端，回到原用户。
+   - 确认终端输出 `Permission denied`，验证非属主写保护生效。
+   - 执行 `exit` 返回原用户会话。
 
-##### 步骤五：跨部门团队协作沙盒目录搭建 (`mkdir`, `chmod 770`, `chgrp`)
-1. 创建共享协作目录：
+##### 步骤五：建立组协作共享目录与权限隔离 (`mkdir`, `chmod 770`, `chgrp`)
+1. 创建团队共享协作目录：
    ```bash
-   sudo mkdir -p /data/apollo_shared
+   sudo mkdir -p /data/shared_workspace
    ```
 2. 将该目录的所属组变更为 `devops`：
    ```bash
-   sudo chgrp devops /data/apollo_shared
+   sudo chgrp devops /data/shared_workspace
    ```
-3. **设置严格的隔离权限**：
-   - 将 `/data/apollo_shared` 的权限精准设置为 **770**（`rwxrwx---`）：
+3. **配置协作隔离权限**：
+   - 将目录权限设置为 **770**（`rwxrwx---`）：
      ```bash
-     sudo chmod 770 /data/apollo_shared
+     sudo chmod 770 /data/shared_workspace
      ```
-   - *含义解析：属主与 `devops` 组成员拥有完全控制权，而组外其他任何人（包括实习生 `intern_leo`）完全禁止读、写、进入！*
-4. 在共享目录下生成协作指南：
+   - *（属主与 devops 组成员具备完整读写执行权限，其他用户完全禁止访问）*
+4. 在共享目录下生成说明文件并分配组读写权限：
    ```bash
-   echo "DevOps Internal Project Documentation" | sudo tee /data/apollo_shared/README.txt
-   sudo chgrp devops /data/apollo_shared/README.txt
-   sudo chmod 660 /data/apollo_shared/README.txt
+   echo "DevOps Team Workspace Documentation" | sudo tee /data/shared_workspace/README.txt
+   sudo chgrp devops /data/shared_workspace/README.txt
+   sudo chmod 660 /data/shared_workspace/README.txt
    ```
 
-##### 步骤六：生成审计报告与成果签名交付 (`security_audit.txt`)
-1. 收集验证信息并导出至用户家目录下的交付文件 `security_audit.txt`：
-   ```bash
-   # 1. 导出修复后的配置文件详情与前 25 行内容
-   ls -l /etc/apollo_service.conf > ~/security_audit.txt
-   head -n 25 /etc/apollo_service.conf >> ~/security_audit.txt
-   
-   # 2. 导出两个用户的账号信息
-   echo -e "\n--- User Accounts ---" >> ~/security_audit.txt
-   id ops_eva >> ~/security_audit.txt
-   id intern_leo >> ~/security_audit.txt
-   
-   # 3. 导出共享沙盒的权限与所属组详情
-   echo -e "\n--- Shared Workspace Permissions ---" >> ~/security_audit.txt
-   ls -ld /data/apollo_shared >> ~/security_audit.txt
-   ls -l /data/apollo_shared >> ~/security_audit.txt
-   ```
-2. 在报告文件末尾追加你的学号与姓名：
-   ```bash
-   echo -e "\n--- Student Signature ---" >> ~/security_audit.txt
-   echo "Student_ID: 20260001" >> ~/security_audit.txt
-   echo "Student_Name: ZhangSan" >> ~/security_audit.txt
-   echo "Audit_Status: COMPLIANT_VERIFIED" >> ~/security_audit.txt
-   ```
+##### 步骤六：生成权限审计报告 (`permission_audit.txt`)
+导出检查结果至报告文件并签名：
+```bash
+# 1. 导出配置文件属性与前 25 行内容
+ls -l /etc/app_service.conf > ~/permission_audit.txt
+head -n 25 /etc/app_service.conf >> ~/permission_audit.txt
+
+# 2. 导出账户与组信息
+echo -e "\n=== User Accounts ===" >> ~/permission_audit.txt
+id ops_eva >> ~/permission_audit.txt
+id intern_leo >> ~/permission_audit.txt
+
+# 3. 导出共享目录权限状态
+echo -e "\n=== Shared Workspace Permissions ===" >> ~/permission_audit.txt
+ls -ld /data/shared_workspace >> ~/permission_audit.txt
+ls -l /data/shared_workspace >> ~/permission_audit.txt
+
+# 4. 追加学生签名
+echo -e "\n=== Student Information ===" >> ~/permission_audit.txt
+echo "Student_ID: 20260001" >> ~/permission_audit.txt
+echo "Student_Name: ZhangSan" >> ~/permission_audit.txt
+echo "Audit_Status: COMPLIANT_VERIFIED" >> ~/permission_audit.txt
+```
 
 ---
 
 ### 实验交付与评分标准
 
 #### 交付物
-- 最终生成的安全加固与审计报告文件：`~/security_audit.txt`
+- 权限与配置审计报告文件：`~/permission_audit.txt`
 
 #### 评分标准（满分 100 分）
 
 | 评分维度 | 分值 | 考察命令 / 技能点 | 评分指标与判定标准 |
 | :--- | :---: | :--- | :--- |
-| **VIM 原生编辑技巧** | 25分 | `vim`, `dd`, `:%s`, `G`, `o` | 废弃注释被 `dd` 彻底清除；全文 8080 成功替换为 9090；prod 与 debug 配置正确；末尾追加 Security 节 |
-| **用户与组结构治理** | 20分 | `groupadd`, `useradd`, `id` | `devops` 与 `interns` 组创建规范；`ops_eva` 与 `intern_leo` 账号建立及主组指定准确 |
-| **配置最小特权控制** | 20分 | `chmod 644`, `chown` | `/etc/apollo_service.conf` 权限为 644，归属 root:root，越权写入被有效拦截 |
-| **共享沙盒隔离权限** | 20分 | `chmod 770`, `chgrp` | `/data/apollo_shared` 准确应用 770 权限，属组为 devops，外界访问权限被彻底收回 |
-| **审计报告与成果签名** | 15分 | 重定向, `head`, 签名 | `security_audit.txt` 结构完备，各命令提取内容完整无缺失，附带准确签名 |
-| **违规扣分项** | -10分 | — | 配置文件语法严重破损；滥用 777 权限；未清理垃圾调试行 |
+| **VIM 编辑与正则替换** | 25分 | `vim`, `dd`, `:%s`, `G`, `o` | 调试注释准确删除；8080 全文替换为 9090；prod 与 debug 项修改准确；成功追加 Security 节 |
+| **用户与组结构配置** | 20分 | `groupadd`, `useradd`, `id` | 正确创建 `devops` 与 `interns` 组；规范创建 `ops_eva` 与 `intern_leo` 账户并正确分配主组 |
+| **配置文件最小特权** | 20分 | `chmod 644`, `chown` | `/etc/app_service.conf` 归属 root:root 且权限为 644，普通用户写入被正确拒绝 |
+| **共享目录隔离策略** | 20分 | `chmod 770`, `chgrp` | `/data/shared_workspace` 属组为 devops 且应用 770 权限，实现针对其他用户的隔离 |
+| **审计报告规范性** | 15分 | 重定向, `head`, 签名 | `permission_audit.txt` 结构整洁，配置文件、账户、目录权限信息完整并附带签名 |
 
 ---
 
 ### 思考与进阶拓展
-1. **深入理解目录权限**：如果某个目录的权限是 `755`，而该目录下某个文件的权限是 `644`，普通用户能否使用 `rm` 命令删除这个文件？为什么？（提示：回顾 `w` 权限对目录的真正含义）。
-2. **符号法与八进制法的转换**：请分别用“八进制数值法”和“符号运算法”写出两条等价的命令，将脚本 `backup.sh` 从 `644` 状态变为只有属主能执行、其他人只读的状态。
+
+1. **目录执行权限的作用机制**：若某目录权限设置为 `755`，而该目录下某文件的权限为 `644`，普通用户能否使用 `rm` 命令删除该文件？说明其判断依据（提示：结合写权限对目录对象的定义进行分析）。
+2. **符号法与八进制表示法的等效转换**：请分别使用“八进制数值法”和“符号表示法”写出两条等价的 `chmod` 命令，将文件 `script.sh` 从 `644` 状态修改为：属主具备读写执行权限（rwx），属组与其他用户仅保留只读权限（r--）。

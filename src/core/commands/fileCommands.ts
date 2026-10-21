@@ -268,7 +268,6 @@ export const fileCommands: Command[] = [
 
       for (const dirName of positional) {
         if (dirName === customMode) continue;
-        await syscallForContext(ctx, SyscallNo.SYS_STAT, dirName);
         const existingNode = ctx.vfs.getNodeByPath(dirName);
         if (existingNode && !pFlag) {
           stderr += `mkdir: cannot create directory '${dirName}': File exists\n`;

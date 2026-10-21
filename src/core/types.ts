@@ -47,6 +47,8 @@ export interface ExecutionResult {
   };
   toggleFullscreen?: 'max' | 'restore';
   logout?: boolean;
+  /** Internal shell-flow marker: an exit builtin stopped the current script/shell. */
+  shellExit?: boolean;
   poweroff?: boolean;
   reboot?: boolean;
   openCheat?: boolean;

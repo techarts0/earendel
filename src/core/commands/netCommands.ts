@@ -2,6 +2,7 @@ import { Command } from '../types';
 import { globalVFS } from '../vfs';
 import { globalServiceManager } from '../serviceManager';
 import { isValidIPv4, simulatedNetwork, simulatedResolve } from '../networkSimulation';
+import { globalFirewallEngine } from '../firewallEngine';
 
 export function resolveHostToIp(host: string): string {
   const hostsContent = globalVFS.readFile('/etc/hosts') ?? '';
@@ -156,6 +157,11 @@ export const netCommands: Command[] = [
       if (!domain) {
         return { stdout: '', stderr: 'nslookup: missing domain name\n', exitCode: 1 };
       }
+
+      const firewallDecision = globalFirewallEngine.evaluate({
+        port: 53, protocol: 'udp', source: simulatedNetwork.localIp, destination: simulatedNetwork.dns, target: 'OUTPUT',
+      });
+      if (firewallDecision !== 'ALLOW') return { stdout: '', stderr: `nslookup: DNS request blocked by simulated firewall (${firewallDecision})\n`, exitCode: 1 };
 
       const ips = await queryDoHDns(domain);
       if (ips.length === 0) return { stdout: '', stderr: `** server can't find ${domain}: NXDOMAIN\n`, exitCode: 1 };

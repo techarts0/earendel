@@ -167,6 +167,33 @@ export class ShellEngine {
     else globalCapabilityManager.grantUserDefaults(this.callerPid, user);
   }
 
+  /** Run one command under another account; root may switch without a password. */
+  public async executeAsUser(user: string, commandLine: string): Promise<ExecutionResult> {
+    if (!user || !commandLine.trim()) return { stdout: '', stderr: 'su: missing user or command\n', exitCode: 1 };
+    const previousUser = this.envValues['USER'] || 'hello';
+    if (previousUser !== 'root') return { stdout: '', stderr: 'su: only root may run a command as another user without authentication\n', exitCode: 1 };
+    const previousHome = this.envValues['HOME'] || this.vfs.getHomeDir(previousUser);
+    const previousPwd = this.envValues['PWD'] || this.vfs.getPwd();
+    // VFS capabilities are an additional boundary to Unix mode bits. Grant only
+    // read access to the exact executable, and only when the target user can
+    // already read and execute it according to VFS permissions.
+    const commandMatch = /^\s*(?:'([^']+)'|"([^"]+)"|(\S+))/.exec(commandLine);
+    const executablePath = commandMatch ? this.vfs.resolvePath(commandMatch[1] || commandMatch[2] || commandMatch[3], user) : '';
+    const executableNode = executablePath ? this.vfs.getNodeByPath(executablePath) : null;
+    const mayExecute = executableNode?.type === 'file' &&
+      this.vfs.checkPermission(executableNode, 'r', user) && this.vfs.checkPermission(executableNode, 'x', user);
+    this.setAuthenticatedUser(user);
+    if (mayExecute) globalCapabilityManager.grantCapability(this.callerPid, 'CAP_VFS_READ', executablePath);
+    this.envValues['HOME'] = this.vfs.getHomeDir(user);
+    this.setProcessCwd(this.envValues['HOME']);
+    try {
+      return await this.execute(commandLine);
+    } finally {
+      this.setAuthenticatedUser(previousUser);
+      this.envValues['HOME'] = previousHome;
+      this.setProcessCwd(previousPwd);
+    }
+  }
   /** Keep the interactive PCB cwd aligned when login/session code changes VFS cwd. */
   setProcessCwd(path: string): void {
     if (typeof path !== 'string' || !path.startsWith('/')) return;
@@ -382,7 +409,7 @@ export class ShellEngine {
     // 1. Process $(command) - do not match $((arithmetic))
     let dollarMatch = result.match(/\$\((?!\()([^)]+)\)/);
     while (dollarMatch) {
-      const subCmd = dollarMatch[1];
+      const subCmd = dollarMatch[1].replace(/\u0000SINGLE_(\d+)\u0000/g, (_m, index) => literals[Number(index)] || '');
       const res = await this.execute(subCmd, scriptArgs);
       const replacement = (res.stdout || '').replace(/\r?\n$/, '');
       result = result.replace(dollarMatch[0], replacement);
@@ -392,7 +419,7 @@ export class ShellEngine {
     // 2. Process `command`
     let backtickMatch = result.match(/`([^`]+)`/);
     while (backtickMatch) {
-      const subCmd = backtickMatch[1];
+      const subCmd = backtickMatch[1].replace(/\u0000SINGLE_(\d+)\u0000/g, (_m, index) => literals[Number(index)] || '');
       const res = await this.execute(subCmd, scriptArgs);
       const replacement = (res.stdout || '').replace(/\r?\n$/, '');
       result = result.replace(backtickMatch[0], replacement);
@@ -418,6 +445,14 @@ export class ShellEngine {
       return { stdout: '', stderr: '', exitCode: 0 };
     }
     const aliased = options.skipAliasExpansion ? trimmed : this.expandAlias(trimmed);
+    const negated = aliased.match(/^!\s+([\s\S]+)$/);
+    if (negated) {
+      const result = await this.execute(negated[1], scriptArgs, pipeInput, { ...options, skipAliasExpansion: true });
+      const exitCode = result.exitCode === 0 ? 1 : 0;
+      this.lastExitCode = exitCode;
+      this.env['?'] = String(exitCode);
+      return { ...result, exitCode };
+    }
     const arithmeticCommand = aliased.match(/^\(\((.*)\)\)$/s);
     if (arithmeticCommand) {
       const value = this.evaluateArithmeticExpression(arithmeticCommand[1], scriptArgs);
@@ -545,10 +580,18 @@ export class ShellEngine {
             if (lastRes.stderr) stderrAcc += lastRes.stderr;
           }
         }
+        if (lastRes.shellExit) break;
       }
 
       this.env['?'] = lastRes.exitCode.toString();
-      return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastRes.exitCode };
+      return {
+        stdout: stdoutAcc,
+        stderr: stderrAcc,
+        exitCode: lastRes.exitCode,
+        shellExit: lastRes.shellExit,
+        logout: lastRes.shellExit && scriptArgs.length === 0,
+        streamed: !!this.onStdout,
+      };
     }
 
     // Pipe | handling (single pipe | not part of ||)
@@ -626,7 +669,7 @@ export class ShellEngine {
 
     const res = await this.executeSingleCommand(withArith, pipeInput);
     this.env['?'] = res.exitCode.toString();
-    return res;
+    return res.shellExit && scriptArgs.length === 0 ? { ...res, logout: true } : res;
   }
 
   private isShellControlFlow(cmdStr: string): boolean {
@@ -648,6 +691,7 @@ export class ShellEngine {
       stderr: flowRes.stderr,
       exitCode: flowRes.exitCode,
       streamed: !!this.onStdout,
+      shellExit: flowRes.signal.type === 'EXIT',
     };
   }
 
@@ -669,10 +713,10 @@ export class ShellEngine {
       switch (node.type) {
         case 'COMMAND': {
           const res = await this.execute(node.line, scriptArgs, pipeInput);
-          if (this.onStdout && res.stdout) {
+          if (this.onStdout && res.stdout && !res.streamed) {
             this.onStdout(res.stdout);
           }
-          if (this.onStderr && res.stderr) {
+          if (this.onStderr && res.stderr && !res.streamed) {
             this.onStderr(res.stderr);
           }
           stdoutAcc += res.stdout;
@@ -680,6 +724,9 @@ export class ShellEngine {
           lastExitCode = res.exitCode;
           this.lastExitCode = lastExitCode;
           this.env['?'] = lastExitCode.toString();
+          if (res.shellExit) {
+            return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: { type: 'EXIT', exitCode: lastExitCode } };
+          }
           break;
         }
         case 'FUNCTION_DEF': {
@@ -730,6 +777,7 @@ export class ShellEngine {
             if (res.signal.type === 'RETURN') {
               return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: res.signal };
             }
+            if (res.signal.type === 'EXIT') return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: res.signal.exitCode, signal: res.signal };
           }
           break;
         }
@@ -773,6 +821,7 @@ export class ShellEngine {
             if (res.signal.type === 'RETURN') {
               return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: res.signal };
             }
+            if (res.signal.type === 'EXIT') return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: res.signal.exitCode, signal: res.signal };
           }
           break;
         }
@@ -793,6 +842,7 @@ export class ShellEngine {
             }
             if (res.signal.type === 'CONTINUE' && res.signal.count > 1) return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: { type: 'CONTINUE', count: res.signal.count - 1 } };
             if (res.signal.type === 'RETURN') return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: lastExitCode, signal: res.signal };
+            if (res.signal.type === 'EXIT') return { stdout: stdoutAcc, stderr: stderrAcc, exitCode: res.signal.exitCode, signal: res.signal };
             if (node.update) this.evaluateArithmeticExpression(node.update, scriptArgs);
           }
           break;
@@ -849,7 +899,8 @@ export class ShellEngine {
   }
 
   private async evaluateConditionAsync(condition: string, scriptArgs: string[] = []): Promise<boolean> {
-    const expanded = this.expandVariables(condition, scriptArgs).trim();
+    const withSubstitutions = await this.expandCommandSubstitutions(condition, scriptArgs);
+    const expanded = this.expandVariables(withSubstitutions, scriptArgs).trim();
     if (!expanded) return false;
 
     const arithmeticCondition = expanded.match(/^\(\((.*)\)\)$/s);
@@ -984,6 +1035,8 @@ export class ShellEngine {
     let rawCmd = cmdStr.trim();
     let redirectTarget: string | null = null;
     let appendMode = false;
+    const redirectStdoutToStderr = /(?:^|\s)>&2\s*$/.test(rawCmd);
+    if (redirectStdoutToStderr) rawCmd = rawCmd.replace(/\s*>&2\s*$/, '').trim();
 
     let isBackground = false;
     if (rawCmd.endsWith('&')) {
@@ -994,12 +1047,12 @@ export class ShellEngine {
     if (rawCmd.includes('>>')) {
       const parts = rawCmd.split('>>');
       rawCmd = parts[0].trim();
-      redirectTarget = parts[1].trim();
+      redirectTarget = this.parseArgs(parts[1].trim())[0] || '';
       appendMode = true;
     } else if (rawCmd.includes('>')) {
       const parts = rawCmd.split('>');
       rawCmd = parts[0].trim();
-      redirectTarget = parts[1].trim();
+      redirectTarget = this.parseArgs(parts[1].trim())[0] || '';
       appendMode = false;
     }
 
@@ -1147,6 +1200,7 @@ export class ShellEngine {
         stdout: funcRes.stdout,
         stderr: funcRes.stderr,
         exitCode: funcRes.exitCode,
+        shellExit: funcRes.signal.type === 'EXIT',
       };
     }
 
@@ -1302,6 +1356,8 @@ export class ShellEngine {
           }
         } else {
           res = await this.executeControlFlow(content, [scriptPath, ...cmdArgs]);
+          // exit terminates the script process; it must not log out the parent terminal.
+          res.shellExit = false;
         }
 
         await this.syscallFor(childPid)(SyscallNo.SYS_EXIT, res.exitCode);
@@ -1335,6 +1391,11 @@ export class ShellEngine {
       const uniquePaths = [...new Set(failedHostWrites)];
       res.exitCode = res.exitCode || 1;
       res.stderr += uniquePaths.map((path) => `-bash: ${path}: host-mounted write failed or permission was revoked\n`).join('');
+    }
+
+    if (redirectStdoutToStderr) {
+      res.stderr += res.stdout;
+      res.stdout = '';
     }
 
     if (redirectTarget && res.exitCode === 0) {

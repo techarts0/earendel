@@ -80,6 +80,7 @@ export interface ReturnNode {
 
 export type FlowSignal =
   | { type: 'NONE' }
+  | { type: 'EXIT'; exitCode: number }
   | { type: 'BREAK'; count: number }
   | { type: 'CONTINUE'; count: number }
   | { type: 'RETURN'; exitCode: number };

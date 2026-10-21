@@ -152,7 +152,7 @@ export const shellControlCommands: Command[] = [
     category: 'sys',
     execute: (ctx) => {
       const code = parseInt(ctx.args[0] || '0', 10);
-      return { stdout: 'logout\n', stderr: '', exitCode: isNaN(code) ? 0 : code };
+      return { stdout: '', stderr: '', exitCode: isNaN(code) ? 0 : code, shellExit: true };
     },
   },
   {

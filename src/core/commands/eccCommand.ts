@@ -513,7 +513,7 @@ export const eccCommand: Command = {
       `  Optimization:    \x1b[32m${isO2 ? '-O2 Comment Removal (syntax-preserving)' : 'None (O0 Debug)'}\x1b[0m`,
       `  Symbol Table:    \x1b[90m${isStrip ? '.symtab stripped (-s)' : `.symtab included (${symtab.length} symbols)`}\x1b[0m`,
       `  Output EAF:      \x1b[1;36m${outputFile}\x1b[0m (Magic: EAF\\x01, Size: ${finalSize}B, +x)`,
-      `\x1b[90mRun using: ./${outputFile}\x1b[0m\n`,
+      `\x1b[90mRun using: ${outputFile.startsWith('/') ? outputFile : `./${outputFile}`}\x1b[0m\n`,
     ].join('\n');
 
     return { stdout: out, stderr: '', exitCode: 0 };

@@ -2,6 +2,7 @@ import { Command } from '../types';
 import { resolveHostToIp, queryDoHDns } from './netCommands';
 import { globalFirewallEngine } from '../firewallEngine';
 import { SyscallNo } from '../../kernel/types';
+import { simulatedNetwork } from '../networkSimulation';
 
 export const netArchiveCommands: Command[] = [
   {
@@ -40,7 +41,7 @@ export const netArchiveCommands: Command[] = [
       const ip = resolvedIps[0];
       if (!ip) return { stdout: '', stderr: `ping: ${target}: Name or service not known\n`, exitCode: 2 };
 
-      const pingDecision = globalFirewallEngine.evaluate({ protocol: 'icmp', target: 'OUTPUT' });
+      const pingDecision = globalFirewallEngine.evaluate({ protocol: 'icmp', source: simulatedNetwork.localIp, destination: ip, target: 'OUTPUT' });
       if (pingDecision !== 'ALLOW') {
         return { stdout: '', stderr: `ping: connect: Network is unreachable (Blocked by Firewall rules)\n`, exitCode: 2 };
       }
@@ -148,7 +149,7 @@ export const netArchiveCommands: Command[] = [
       let requestUrl: URL;
       try { requestUrl = new URL(rawUrl); } catch { return { stdout: '', stderr: `curl: (3) URL rejected: ${rawUrl}\n`, exitCode: 3 }; }
       const requestPort = requestUrl.port ? Number(requestUrl.port) : requestUrl.protocol === 'https:' ? 443 : 80;
-      const firewallDecision = globalFirewallEngine.evaluate({ port: requestPort, protocol: 'tcp', target: 'OUTPUT' });
+      const firewallDecision = globalFirewallEngine.evaluate({ port: requestPort, protocol: 'tcp', source: simulatedNetwork.localIp, destination: resolveHostToIp(requestUrl.hostname), target: 'OUTPUT' });
       if (firewallDecision !== 'ALLOW') return { stdout: '', stderr: `curl: (7) Connection ${firewallDecision.toLowerCase()} by simulated firewall on port ${requestPort}\n`, exitCode: 7 };
 
       if (userAuth) {
@@ -244,7 +245,7 @@ export const netArchiveCommands: Command[] = [
       let contentType = 'text/html';
 
       const requestPort = parsedUrl.port ? Number(parsedUrl.port) : parsedUrl.protocol === 'https:' ? 443 : 80;
-      const firewallDecision = globalFirewallEngine.evaluate({ port: requestPort, protocol: 'tcp', target: 'OUTPUT' });
+      const firewallDecision = globalFirewallEngine.evaluate({ port: requestPort, protocol: 'tcp', source: simulatedNetwork.localIp, destination: resolveHostToIp(host), target: 'OUTPUT' });
       if (firewallDecision !== 'ALLOW') return { stdout: '', stderr: `wget: connection blocked by simulated firewall on port ${requestPort}\n`, exitCode: 4 };
       const { eslibNet } = await import('../eslibNet');
       const response = await eslibNet.fetch(rawUrl, { signal: ctx.abortSignal }, ctx.syscall);

@@ -2,7 +2,7 @@
 import { globalIPCBus } from '../ipcBus';
 import { IPCMessage } from '../types';
 import { globalFirewallEngine } from '../../core/firewallEngine';
-import { simulatedResolve } from '../../core/networkSimulation';
+import { simulatedNetwork, simulatedResolve } from '../../core/networkSimulation';
 import { globalCapabilityManager } from '../capability';
 import { globalTaskScheduler } from '../taskScheduler';
 
@@ -15,6 +15,7 @@ export class NetworkDaemon {
   public static readonly MAX_FETCH_HEADERS = 64;
   private activeSockets: Map<string, { ownerPid: number; resource: string; socket: WebSocket }> = new Map();
   private activeFetches = new Map<number, Set<{ controller: AbortController; resource: string }>>();
+  private nextEphemeralPort = 49152;
 
   constructor() {
     globalCapabilityManager.onRevocation((pid, capability) => {
@@ -139,12 +140,17 @@ export class NetworkDaemon {
       return { status: 0, statusText: 'Invalid Method', ok: false, body: '', error: `Unsupported method: ${methodUpper}` };
     }
     const port = parsed.port ? Number(parsed.port) : parsed.protocol === 'https:' ? 443 : 80;
-    const decision = globalFirewallEngine.evaluate({ port, protocol: 'tcp', target: 'OUTPUT' });
+    const destination = simulatedResolve(parsed.hostname) || parsed.hostname;
+    const sourcePort = this.nextEphemeralPort;
+    this.nextEphemeralPort = sourcePort >= 65535 ? 49152 : sourcePort + 1;
+    const connectionPacket = { port, sourcePort, protocol: 'tcp' as const, source: simulatedNetwork.localIp, destination, target: 'OUTPUT' as const };
+    const decision = globalFirewallEngine.evaluate(connectionPacket);
     if (decision !== 'ALLOW') {
       return { status: 0, statusText: decision === 'REJECT' ? 'Connection refused' : 'Network unreachable', ok: false, body: '', error: `Blocked by simulated firewall (${decision})` };
     }
 
     const controller = new AbortController();
+    let trackedConnectionId: string | null = null;
     const process = globalTaskScheduler.getProcess(ownerPid);
     if (!process || process.state !== 'RUNNING') {
       return { status: 0, statusText: 'Fetch Error', ok: false, body: '', error: `ESRCH: process ${ownerPid} is not running` };
@@ -170,6 +176,16 @@ export class NetworkDaemon {
         // A followed redirect could reach a different port after the firewall check.
         redirect: 'error',
       });
+
+      trackedConnectionId = globalFirewallEngine.trackConnection(connectionPacket);
+      const inboundDecision = globalFirewallEngine.evaluate({
+        port: sourcePort, sourcePort: port, protocol: 'tcp', source: destination,
+        destination: simulatedNetwork.localIp, target: 'INPUT',
+      });
+      if (inboundDecision !== 'ALLOW') {
+        await response.body?.cancel();
+        return { status: 0, statusText: inboundDecision === 'REJECT' ? 'Connection refused' : 'Network unreachable', ok: false, body: '', error: `Response blocked by simulated firewall (${inboundDecision}) on INPUT` };
+      }
 
       const declaredLength = Number(response.headers.get('content-length'));
       if (Number.isFinite(declaredLength) && declaredLength > NetworkDaemon.MAX_FETCH_RESPONSE_BYTES) {
@@ -214,6 +230,7 @@ export class NetworkDaemon {
       };
     } finally {
       clearTimeout(timeout);
+      globalFirewallEngine.closeConnection(trackedConnectionId);
       callerSignal?.removeEventListener('abort', abortFromCaller);
       const active = this.activeFetches.get(ownerPid);
       active?.delete(request);
@@ -226,6 +243,10 @@ export class NetworkDaemon {
     if (typeof hostname !== 'string' || hostname.length > 253) {
       return { hostname: '', ip: '', addresses: [], error: 'EINVAL: hostname exceeds 253 characters' };
     }
+    const firewallDecision = globalFirewallEngine.evaluate({
+      port: 53, protocol: 'udp', source: simulatedNetwork.localIp, destination: simulatedNetwork.dns, target: 'OUTPUT',
+    });
+    if (firewallDecision !== 'ALLOW') return { hostname, ip: '', addresses: [], error: `Blocked by simulated firewall (${firewallDecision}) on UDP port 53` };
     const ip = simulatedResolve(hostname);
     if (!ip) return { hostname, ip: '', addresses: [], error: 'NXDOMAIN: invalid hostname' };
     return { hostname, ip, addresses: [ip], simulated: true };
@@ -242,7 +263,8 @@ export class NetworkDaemon {
     if (type === 'ws' && parsed.protocol !== 'ws:' && parsed.protocol !== 'wss:') return { error: 'WebSocket URL must use ws:// or wss://' };
     if (type === 'ws') {
       const port = parsed.port ? Number(parsed.port) : parsed.protocol === 'wss:' ? 443 : 80;
-      const decision = globalFirewallEngine.evaluate({ port, protocol: 'tcp', target: 'OUTPUT' });
+      const destination = simulatedResolve(parsed.hostname) || parsed.hostname;
+      const decision = globalFirewallEngine.evaluate({ port, protocol: 'tcp', source: simulatedNetwork.localIp, destination, target: 'OUTPUT' });
       if (decision !== 'ALLOW') return { error: `Blocked by simulated firewall (${decision})` };
     }
     const socketId = `sock_${Math.random().toString(36).substring(2, 9)}`;

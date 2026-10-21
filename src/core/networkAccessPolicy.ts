@@ -1,6 +1,7 @@
 import { globalFirewallEngine } from './firewallEngine';
 import { globalCapabilityManager } from '../kernel/capability';
 import { globalTaskScheduler } from '../kernel/taskScheduler';
+import { simulatedNetwork, simulatedResolve } from './networkSimulation';
 
 /** Shared policy for browser-side HTTP clients that do not call through netd. */
 export function checkNetworkRequest(pid: number, rawUrl: string): string | null {
@@ -21,7 +22,10 @@ export function checkNetworkRequest(pid: number, rawUrl: string): string | null 
   }
 
   const port = url.port ? Number(url.port) : url.protocol === 'https:' ? 443 : 80;
-  const decision = globalFirewallEngine.evaluate({ port, protocol: 'tcp', target: 'OUTPUT' });
+  const destination = simulatedResolve(url.hostname) || url.hostname;
+  const decision = globalFirewallEngine.evaluate({
+    port, protocol: 'tcp', source: simulatedNetwork.localIp, destination, target: 'OUTPUT',
+  });
   if (decision !== 'ALLOW') return `Network request blocked by simulated firewall (${decision}) on OUTPUT port ${port}.`;
   return null;
 }
