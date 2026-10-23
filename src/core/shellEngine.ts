@@ -7,7 +7,7 @@ import { syscall, syscallAs } from '../kernel/syscall';
 import { SyscallNo } from '../kernel/types';
 import './commands'; // Ensure all command plugins are auto-registered
 import { ASTNode, FlowSignal, parseShellScript, splitStatements } from './shellParser';
-import { createCapabilityVfsView } from './scopedVfs';
+import { createCapabilityVfsView, flushPendingHostWritesForView } from './scopedVfs';
 import { globalCapabilityManager } from '../kernel/capability';
 import { globalTaskScheduler } from '../kernel/taskScheduler';
 
@@ -1386,7 +1386,7 @@ export class ShellEngine {
       }
     }
 
-    const failedHostWrites = await this.vfs.flushPendingHostWrites();
+    const failedHostWrites = await flushPendingHostWritesForView(this.vfs);
     if (failedHostWrites.length > 0) {
       const uniquePaths = [...new Set(failedHostWrites)];
       res.exitCode = res.exitCode || 1;

@@ -8,6 +8,14 @@ const MAX_VIEW_SNAPSHOT_WORK = 20_000;
 const MAX_VIEW_SNAPSHOT_CONTENT_BYTES = 32 * 1024 * 1024;
 const capabilityViewBases = new WeakMap<VirtualFileSystem, VirtualFileSystem>();
 
+/** Flush host-mount writes for a VFS view without exposing persistence internals on the view. */
+export async function flushPendingHostWritesForView(vfs: VirtualFileSystem): Promise<string[]> {
+  const base = capabilityViewBases.get(vfs) || vfs;
+  return typeof base.flushPendingHostWrites === 'function'
+    ? base.flushPendingHostWrites()
+    : [];
+}
+
 /** Count UTF-8 bytes without allocating an encoded copy of potentially huge content. */
 function boundedUtf8ByteLength(value: string, limit: number): number | null {
   let bytes = 0;

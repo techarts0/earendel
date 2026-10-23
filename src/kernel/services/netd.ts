@@ -6,6 +6,10 @@ import { simulatedNetwork, simulatedResolve } from '../../core/networkSimulation
 import { globalCapabilityManager } from '../capability';
 import { globalTaskScheduler } from '../taskScheduler';
 
+// Set VITE_EARENDEL_CORS_PROXY_URL to a trusted, self-hosted relay endpoint
+// accepting `?url=<encoded target>`. No third-party relay is contacted by default.
+const CORS_RELAY_URL = import.meta.env.VITE_EARENDEL_CORS_PROXY_URL?.trim() || '';
+
 export class NetworkDaemon {
   public static readonly MAX_SOCKETS_PER_PROCESS = 32;
   public static readonly MAX_FETCHES_PER_PROCESS = 8;
@@ -168,14 +172,48 @@ export class NetworkDaemon {
     if (callerSignal?.aborted) abortFromCaller();
     else callerSignal?.addEventListener('abort', abortFromCaller, { once: true });
     try {
-      const response = await fetch(url, {
-        method: methodUpper,
-        headers,
-        body: requestBody,
-        signal: controller.signal,
-        // A followed redirect could reach a different port after the firewall check.
-        redirect: 'error',
-      });
+      let response: Response;
+      try {
+        response = await fetch(url, {
+          method: methodUpper,
+          headers,
+          body: requestBody,
+          signal: controller.signal,
+          // A followed redirect could reach a different port after the firewall check.
+          redirect: 'error',
+        });
+      } catch (directError: any) {
+        // Cross-origin sites may reject browser reads through CORS. An
+        // administrator can opt into a trusted relay; never forward user
+        // traffic to an implicit public proxy.
+        const canRelay = CORS_RELAY_URL
+          && !controller.signal.aborted
+          && (methodUpper === 'GET' || methodUpper === 'HEAD')
+          && requestBody === undefined
+          && Object.keys(headers).length === 0;
+        if (!canRelay) {
+          if (!controller.signal.aborted && directError instanceof TypeError) {
+            throw new Error(`Browser could not read the response from ${parsed.hostname} (CORS, network connectivity, or site policy). Configure a trusted relay with VITE_EARENDEL_CORS_PROXY_URL if this site does not allow browser requests.`);
+          }
+          throw directError;
+        }
+        const relayBase = CORS_RELAY_URL.includes('?') ? `${CORS_RELAY_URL}&url=` : `${CORS_RELAY_URL}?url=`;
+        const relayUrl = `${relayBase}${encodeURIComponent(url)}`;
+        const relayDecision = globalFirewallEngine.evaluate({
+          port: 443,
+          sourcePort,
+          protocol: 'tcp',
+          source: simulatedNetwork.localIp,
+          destination: new URL(CORS_RELAY_URL).hostname,
+          target: 'OUTPUT',
+        });
+        if (relayDecision !== 'ALLOW') throw new Error(`Direct request failed; trusted CORS relay blocked by simulated firewall (${relayDecision})`);
+        try {
+          response = await fetch(relayUrl, { method: methodUpper, signal: controller.signal, redirect: 'error' });
+        } catch (relayError: any) {
+          throw new Error(`Direct request failed (${directError?.message || 'browser network error'}); trusted CORS relay failed (${relayError?.message || 'network error'})`);
+        }
+      }
 
       trackedConnectionId = globalFirewallEngine.trackConnection(connectionPacket);
       const inboundDecision = globalFirewallEngine.evaluate({
