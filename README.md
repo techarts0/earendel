@@ -33,6 +33,10 @@ Earendel is a POSIX-inspired WebOS teaching simulation built with V8 and browser
 
 Operations that use the simulated syscall surface flow through syscall dispatch, IPC routing, and daemon handlers. Shell commands and other subsystems may also use their documented in-process APIs; behavior and isolation are limited to the compatibility profile below.
 
+### Browser network access
+
+`curl` and `fetch` issue requests through the browser, so a target site must allow cross-origin reads (CORS) for direct access. For sites that do not, an operator can set `VITE_EARENDEL_CORS_PROXY_URL` at build time to a trusted relay endpoint that accepts a `url` query parameter and returns the upstream response. Earendel only uses this opt-in relay as a fallback for anonymous `GET`/`HEAD` requests without custom headers or a body; credentials and other request data are never sent to it. No public relay is enabled by default.
+
 ## Features
 
 ### 🔧 Microkernel & Syscalls
